@@ -1,0 +1,2 @@
+# Generalized_Operation_Diffusion
+Generalized_Operation_Diffusion of Kim n Jang
