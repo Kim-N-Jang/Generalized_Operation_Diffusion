@@ -1,12 +1,12 @@
 import numpy as np
 from UniformInstanceGen import UniformInstanceGen
 
-Job = 20
-Machine = 10
+Job = 3
+Machine = 3
 Low = 1
 High = 99
 Size = 100
-Seed = 200
+Seed = 42
 
 def main():
     np.random.seed(Seed)

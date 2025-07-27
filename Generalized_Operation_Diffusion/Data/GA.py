@@ -103,42 +103,34 @@ def solve_jssp_instance(proc_time, mach_order, max_gen=300, pop_size=300):
         return_schedule=True
     )
     updated_schedule = add_order_on_machine(schedule, problem.num_machines)
+
     return makespan, res['executeTime'], updated_schedule, best_keys
 
 # 전체 dataset에 대해 GA 실행
 # 문제 (proc_time, mach_order) -> 정답 (proc_time, mach_order, makespan, schedule)
-def run_all_instances(dataset, save_path):
-    dataset_GA = []
-    for idx, (proc_time, mach_order) in enumerate(dataset):
-        print("="*50)
-        print(f"🗆️ Instance {idx+1}/{len(dataset)}")
+def RunAllInstances(ProcTime, Eligiblity):
 
-        makespan, exetime, schedule, best_keys = solve_jssp_instance(proc_time, mach_order)
-        print(f"✅ Makespan: {makespan}")
-        print(f"⏱️  Time: {exetime:.2f}s\n")
-        print(schedule)
-        print(best_keys)
+    _, exetime, schedule, best_keys = solve_jssp_instance(ProcTime, Eligiblity)
+    schedule_np = np.array(schedule, dtype=np.int32)
+    instance_data = (ProcTime, Eligiblity, schedule_np)
 
-        schedule_np = np.array(schedule, dtype=np.int32)
-        instance_data = (proc_time, mach_order, makespan, schedule_np)
-        dataset_GA.append(instance_data)
+    job_adj, machine_adj, combined_adj = build_adjs(instance_data)
 
-    np.save(save_path, np.array(dataset_GA, dtype=object))
-    print(f"✅ 저장 완료: {save_path}")
+    return combined_adj
 
+
+def get_task_id(JobNum, MachineNum, Idx):
+    return JobNum * MachineNum + Idx
 
 # Job마다 모든 Machine에 할당 되야 된다 가정
 def build_adjs(sample):
-    proc_time, mach_order, makespan, schedule = sample
+    proc_time, mach_order, schedule = sample
 
     n_jobs, n_machines = proc_time.shape
     n_tasks = n_jobs * n_machines
 
     job_adj = np.eye(n_tasks, dtype=np.float32)
     machine_adj = np.zeros((n_tasks, n_tasks), dtype=np.float32)
-
-    def get_task_id(job, op):
-        return job * n_machines + op
 
     # Job 간 연결
     for job in range(n_jobs):
@@ -162,25 +154,18 @@ def build_adjs(sample):
             machine_adj[to_id, from_id] = 1
 
     # 최종 adj = job_adj + machine_adj
-    combined_adj = np.logical_or(job_adj, machine_adj).astype(np.float32)
-    np.fill_diagonal(combined_adj, 1)
+    Adj = np.logical_or(job_adj, machine_adj).astype(np.float32)
+    np.fill_diagonal(Adj, 1)
 
-    return job_adj, machine_adj, combined_adj
+    return Adj
 
-import numpy as np
 
-def generate_adj(dataset, save_path):
-    full_dataset = []
+def generate_adj(sample):
 
-    for i, sample in enumerate(dataset):
-        print(f"🔧 Processing instance {i+1}/{len(dataset)}")
-        job_adj, machine_adj, combined_adj = build_adjs(sample)
+    job_adj, machine_adj, combined_adj = build_adjs(sample)
+    full_data = sample + (job_adj, machine_adj, combined_adj)
+    return full_data
 
-        full_data = sample + (job_adj, machine_adj, combined_adj)
-        full_dataset.append(full_data)
-
-    np.save(save_path, np.array(full_dataset, dtype=object))
-    print(f"✅ 저장 완료: {save_path}")
 
 
 if __name__ == '__main__':
