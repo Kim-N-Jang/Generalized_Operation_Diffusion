@@ -1,5 +1,5 @@
 import numpy as np
-from GA import RunAllInstances, generate_adj
+from GA import RunAllInstances
 
 def UniformInstanceGen(Nj, Nm, low, high):
     T = np.random.randint(low=low, high=high, size=(Nj, Nm))
