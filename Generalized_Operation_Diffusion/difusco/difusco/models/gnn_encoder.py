@@ -84,19 +84,18 @@ class GNNLayer(nn.Module):
     """
     if not sparse:
       batch_size, num_nodes, hidden_dim = h.shape
-    else:
-      batch_size = None
-      num_nodes, hidden_dim = h.shape
+    # else: # sparse
+    #   batch_size = None
+    #   num_nodes, hidden_dim = h.shape
     h_in = h
     e_in = e
-
     # Linear transformations for node update
     Uh = self.U(h)  # B x V x H
 
     if not sparse:
       Vh = self.V(h).unsqueeze(1).expand(-1, num_nodes, -1, -1)  # B x V x V x H
-    else:
-      Vh = self.V(h[edge_index[1]])  # E x H
+    # else: # sparse
+    #   Vh = self.V(h[edge_index[1]])  # E x H
 
     # Linear transformations for edge update and gating
     Ah = self.A(h)  # B x V x H, source
@@ -106,8 +105,8 @@ class GNNLayer(nn.Module):
     # Update edge features and compute edge gates
     if not sparse:
       e = Ah.unsqueeze(1) + Bh.unsqueeze(2) + Ce  # B x V x V x H
-    else:
-      e = Ah[edge_index[1]] + Bh[edge_index[0]] + Ce  # E x H
+    # else: # sparse
+    #   e = Ah[edge_index[1]] + Bh[edge_index[0]] + Ce  # E x H
 
     gates = torch.sigmoid(e)  # B x V x V x H / E x H
 
@@ -119,16 +118,16 @@ class GNNLayer(nn.Module):
       h = self.norm_h(
           h.view(batch_size * num_nodes, hidden_dim)
       ).view(batch_size, num_nodes, hidden_dim) if self.norm_h else h
-    else:
-      h = self.norm_h(h) if self.norm_h else h
+    # else: #sparse
+    #   h = self.norm_h(h) if self.norm_h else h
 
     # Normalize edge features
     if not sparse:
       e = self.norm_e(
           e.view(batch_size * num_nodes * num_nodes, hidden_dim)
       ).view(batch_size, num_nodes, num_nodes, hidden_dim) if self.norm_e else e
-    else:
-      e = self.norm_e(e) if self.norm_e else e
+    # else: # sparse
+    #   e = self.norm_e(e) if self.norm_e else e
 
     # Apply non-linearity
     h = F.relu(h)
@@ -306,8 +305,8 @@ class GNNEncoder(nn.Module):
     if not node_feature_only:
       self.pos_embed = PositionEmbeddingSine(hidden_dim // 2, normalize=True)
       self.edge_pos_embed = ScalarEmbeddingSine(hidden_dim, normalize=False)
-    else:
-      self.pos_embed = ScalarEmbeddingSine1D(hidden_dim, normalize=False)
+    # else:
+    #   self.pos_embed = ScalarEmbeddingSine1D(hidden_dim, normalize=False)
     self.time_embed = nn.Sequential(
         linear(hidden_dim, time_embed_dim),
         nn.ReLU(),
@@ -380,74 +379,6 @@ class GNNEncoder(nn.Module):
     e = self.out(e.permute((0, 3, 1, 2)))
     return e
 
-  def sparse_forward(self, x, graph, timesteps, edge_index):
-    """
-    Args:
-        x: Input node coordinates (V x 2)
-        graph: Graph edge features (E)
-        timesteps: Input edge timestep features (E)
-        edge_index: Adjacency matrix for the graph (2 x E)
-    Returns:
-        Updated edge features (E x H)
-    """
-    # Embed edge features
-    x = self.node_embed(self.pos_embed(x.unsqueeze(0)).squeeze(0))
-    e = self.edge_embed(self.edge_pos_embed(graph.expand(1, 1, -1)).squeeze())
-    time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
-    edge_index = edge_index.long()
-
-    x, e = self.sparse_encoding(x, e, edge_index, time_emb)
-    e = e.reshape((1, x.shape[0], -1, e.shape[-1])).permute((0, 3, 1, 2))
-    e = self.out(e).reshape(-1, edge_index.shape[1]).permute((1, 0))
-    return e
-
-  def sparse_forward_node_feature_only(self, x, timesteps, edge_index):
-    x = self.node_embed(self.pos_embed(x))
-    x_shape = x.shape
-    e = torch.zeros(edge_index.size(1), self.hidden_dim, device=x.device)
-    time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
-    edge_index = edge_index.long()
-
-    x, e = self.sparse_encoding(x, e, edge_index, time_emb)
-    x = x.reshape((1, x_shape[0], -1, x.shape[-1])).permute((0, 3, 1, 2))
-    x = self.out(x).reshape(-1, x_shape[0]).permute((1, 0))
-    return x
-
-  def sparse_encoding(self, x, e, edge_index, time_emb):
-    adj_matrix = SparseTensor(
-        row=edge_index[0],
-        col=edge_index[1],
-        value=torch.ones_like(edge_index[0].float()),
-        sparse_sizes=(x.shape[0], x.shape[0]),
-    )
-    adj_matrix = adj_matrix.to(x.device)
-
-    for layer, time_layer, out_layer in zip(self.layers, self.time_embed_layers, self.per_layer_out):
-      x_in, e_in = x, e
-
-      if self.use_activation_checkpoint:
-        single_time_emb = time_emb[:1]
-
-        run_sparse_layer_fn = functools.partial(
-            run_sparse_layer,
-            add_time_on_edge=not self.node_feature_only
-        )
-
-        out = activation_checkpoint.checkpoint(
-            run_sparse_layer_fn(layer, time_layer, out_layer, adj_matrix, edge_index),
-            x_in, e_in, single_time_emb
-        )
-        x = out[0]
-        e = out[1]
-      else:
-        x, e = layer(x_in, e_in, adj_matrix, mode="direct", edge_index=edge_index, sparse=True)
-        if not self.node_feature_only:
-          e = e + time_layer(time_emb)
-        else:
-          x = x + time_layer(time_emb)
-        x = x_in + x
-        e = e_in + out_layer(e)
-    return x, e
 
   def forward(self, x, timesteps, graph=None, edge_index=None):
     if self.node_feature_only:

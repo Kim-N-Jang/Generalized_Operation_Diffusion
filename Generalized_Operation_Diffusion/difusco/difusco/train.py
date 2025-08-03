@@ -20,19 +20,19 @@ from pl_tsp_model import TSPModel
 # parameters
 
 data_params = {
-    'training_split': 'data/tsp/tsp200_test_concorde.txt',
-    'training_split_label_dir': './DATA/20250715_004954_train__tsp_n20',
-    'validation_split': 'data/tsp/tsp200_test_concorde.txt',
-    'test_split': 'data/tsp/tsp200_test_concorde.txt',
-    'validation_examples': 'data/tsp/tsp200_test_concorde.txt',
+    'training_split': 'GeneratedData_Job3Machine5Seed42Size10.npy',
+    'training_split_label_dir': 'GeneratedData_Job3Machine5Seed42Size10.npy',
+    'validation_split': 'GeneratedData_Job3Machine5Seed42Size10.npy',
+    'test_split': 'GeneratedData_Job3Machine5Seed42Size10.npy',
+    'validation_examples': 10,
     'num_workers': 16,
-    'storage_path': './results/'
+    'storage_path': './data/'
     
 }
 
 wandb_params = {
     'project_name': 'jssp_diffusion',
-    'wandb_entity': 'chris3427',
+    'wandb_entity': '8chris8',
     'wandb_logger_name': 'difusco',
     'resume_weight_only': False,
     'storage_path': './results/',
@@ -47,7 +47,7 @@ model_params = {
     'aggregation': 'sum',
     'two_opt_iterations': 1000,
     'save_numpy_heatmap': True,
-    'use_activation_checkpoint': True,
+    'use_activation_checkpoint': False,
 }
 
 optimizer_params = {
@@ -68,8 +68,8 @@ trainer_params = {
     'inference_trick': 'ddim',
     'sequential_sampling': 1,
     'parallel_sampling': 1,
-    'epochs': 50,
-    'batch_size': 64,
+    'epochs': 10,
+    'batch_size': 5,
     'ckpt_path': None,
     'saving_mode': 'min'
 }
@@ -119,7 +119,7 @@ def main():
     callbacks=[TQDMProgressBar(refresh_rate=20), checkpoint_callback, lr_callback],
     logger=wandb_logger,
     check_val_every_n_epoch=1,
-    strategy=DDPStrategy(static_graph=True),
+    #strategy=DDPStrategy(static_graph=True),
     precision=16 if trainer_params['fp16'] else 32,
     )
 

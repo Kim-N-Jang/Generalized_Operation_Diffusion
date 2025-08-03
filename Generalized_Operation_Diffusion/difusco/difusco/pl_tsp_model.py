@@ -31,7 +31,7 @@ class TSPModel(COMetaModel):
         data_file=os.path.join(self.data_params['storage_path'], self.data_params['training_split']),
         sparse_factor=self.model_params['sparse_factor'],
     )
-
+    print(f">>> Train dataset size: {len(self.train_dataset)} samples")
     self.test_dataset = TSPGraphDataset(
         data_file=os.path.join(self.data_params['storage_path'], self.data_params['test_split']),
         sparse_factor=self.model_params['sparse_factor'],
@@ -165,19 +165,19 @@ class TSPModel(COMetaModel):
       real_batch_idx, points, adj_matrix, gt_tour = batch
       np_points = points.cpu().numpy()[0]
       np_gt_tour = gt_tour.cpu().numpy()[0]
-    else:
-      real_batch_idx, graph_data, point_indicator, edge_indicator, gt_tour = batch
-      route_edge_flags = graph_data.edge_attr
-      points = graph_data.x
-      edge_index = graph_data.edge_index
-      num_edges = edge_index.shape[1]
-      batch_size = point_indicator.shape[0]
-      adj_matrix = route_edge_flags.reshape((batch_size, num_edges // batch_size))
-      points = points.reshape((-1, 2))
-      edge_index = edge_index.reshape((2, -1))
-      np_points = points.cpu().numpy()
-      np_gt_tour = gt_tour.cpu().numpy().reshape(-1)
-      np_edge_index = edge_index.cpu().numpy()
+    # else: # Sparse
+    #   real_batch_idx, graph_data, point_indicator, edge_indicator, gt_tour = batch
+    #   route_edge_flags = graph_data.edge_attr
+    #   points = graph_data.x
+    #   edge_index = graph_data.edge_index
+    #   num_edges = edge_index.shape[1]
+    #   batch_size = point_indicator.shape[0]
+    #   adj_matrix = route_edge_flags.reshape((batch_size, num_edges // batch_size))
+    #   points = points.reshape((-1, 2))
+    #   edge_index = edge_index.reshape((2, -1))
+    #   np_points = points.cpu().numpy()
+    #   np_gt_tour = gt_tour.cpu().numpy().reshape(-1)
+    #   np_edge_index = edge_index.cpu().numpy()
 
     stacked_tours = []
     ns, merge_iterations = 0, 0
@@ -185,17 +185,17 @@ class TSPModel(COMetaModel):
     if self.trainer_params['parallel_sampling'] > 1:
       if not self.sparse:
         points = points.repeat(self.trainer_params['parallel_sampling'], 1, 1)
-      else:
-        points = points.repeat(self.trainer_params['parallel_sampling'], 1)
-        edge_index = self.duplicate_edge_index(edge_index, np_points.shape[0], device)
+      # else: # Sparse
+      #   points = points.repeat(self.trainer_params['parallel_sampling'], 1)
+      #   edge_index = self.duplicate_edge_index(edge_index, np_points.shape[0], device)
 
     for _ in range(self.trainer_params['sequential_sampling']):
       xt = torch.randn_like(adj_matrix.float())
       if self.trainer_params['parallel_sampling'] > 1:
         if not self.sparse:
           xt = xt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
-        else:
-          xt = xt.repeat(self.trainer_params['parallel_sampling'], 1)
+        # else: # Sparse
+        #   xt = xt.repeat(self.trainer_params['parallel_sampling'], 1)
         xt = torch.randn_like(xt)
 
       if self.diffusion_type == 'gaussian':
@@ -203,8 +203,8 @@ class TSPModel(COMetaModel):
       else:
         xt = (xt > 0).long()
 
-      if self.sparse:
-        xt = xt.reshape(-1)
+      # if self.sparse:
+      #   xt = xt.reshape(-1)
 
       steps = self.trainer_params['inference_diffusion_steps']
       time_schedule = InferenceSchedule(inference_schedule=self.trainer_params['inference_schedule'],
@@ -227,40 +227,40 @@ class TSPModel(COMetaModel):
         adj_mat = xt.cpu().detach().numpy() * 0.5 + 0.5
       else:
         adj_mat = xt.float().cpu().detach().numpy() + 1e-6
-
       if self.model_params['save_numpy_heatmap']:
         self.run_save_numpy_heatmap(adj_mat, np_points, real_batch_idx, split)
+    return adj_mat
+    ## Difusco : adj -> merge_tours, 2-opt -> tour solution  
+    #   tours, merge_iterations = merge_tours(
+    #       adj_mat, np_points, np_edge_index,
+    #       sparse_graph=self.sparse,
+    #       parallel_sampling=self.trainer_params['parallel_sampling'],
+    #   )
 
-      tours, merge_iterations = merge_tours(
-          adj_mat, np_points, np_edge_index,
-          sparse_graph=self.sparse,
-          parallel_sampling=self.trainer_params['parallel_sampling'],
-      )
+    #   # Refine using 2-opt
+    #   solved_tours, ns = batched_two_opt_torch(
+    #       np_points.astype("float64"), np.array(tours).astype('int64'),
+    #       max_iterations=self.model_params['two_opt_iterations'], device=device)
+    #   stacked_tours.append(solved_tours)
 
-      # Refine using 2-opt
-      solved_tours, ns = batched_two_opt_torch(
-          np_points.astype("float64"), np.array(tours).astype('int64'),
-          max_iterations=self.model_params['two_opt_iterations'], device=device)
-      stacked_tours.append(solved_tours)
+    # solved_tours = np.concatenate(stacked_tours, axis=0)
 
-    solved_tours = np.concatenate(stacked_tours, axis=0)
+    # tsp_solver = TSPEvaluator(np_points)
+    # gt_cost = tsp_solver.evaluate(np_gt_tour)
 
-    tsp_solver = TSPEvaluator(np_points)
-    gt_cost = tsp_solver.evaluate(np_gt_tour)
+    # total_sampling = self.trainer_params['parallel_sampling'] * self.trainer_params['sequential_sampling']
+    # all_solved_costs = [tsp_solver.evaluate(solved_tours[i]) for i in range(total_sampling)]
+    # best_solved_cost = np.min(all_solved_costs)
 
-    total_sampling = self.trainer_params['parallel_sampling'] * self.trainer_params['sequential_sampling']
-    all_solved_costs = [tsp_solver.evaluate(solved_tours[i]) for i in range(total_sampling)]
-    best_solved_cost = np.min(all_solved_costs)
-
-    metrics = {
-        f"{split}/gt_cost": gt_cost,
-        f"{split}/2opt_iterations": ns,
-        f"{split}/merge_iterations": merge_iterations,
-    }
-    for k, v in metrics.items():
-      self.log(k, v, on_epoch=True, sync_dist=True)
-    self.log(f"{split}/solved_cost", best_solved_cost, prog_bar=True, on_epoch=True, sync_dist=True)
-    return metrics
+    # metrics = {
+    #     f"{split}/gt_cost": gt_cost,
+    #     f"{split}/2opt_iterations": ns,
+    #     f"{split}/merge_iterations": merge_iterations,
+    # }
+    # for k, v in metrics.items():
+    #   self.log(k, v, on_epoch=True, sync_dist=True)
+    # self.log(f"{split}/solved_cost", best_solved_cost, prog_bar=True, on_epoch=True, sync_dist=True)
+    # return metrics
 
   def run_save_numpy_heatmap(self, adj_mat, np_points, real_batch_idx, split):
     if self.trainer_params['parallel_sampling'] > 1 or self.trainer_params['sequential_sampling'] > 1:
