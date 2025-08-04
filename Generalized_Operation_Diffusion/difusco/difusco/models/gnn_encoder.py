@@ -299,7 +299,7 @@ class GNNEncoder(nn.Module):
     self.node_feature_only = node_feature_only
     self.hidden_dim = hidden_dim
     time_embed_dim = hidden_dim // 2
-    self.node_embed = nn.Linear(hidden_dim, hidden_dim)
+    self.node_embed = nn.Linear(1, hidden_dim)
     self.edge_embed = nn.Linear(hidden_dim, hidden_dim)
 
     if not node_feature_only:
@@ -357,8 +357,9 @@ class GNNEncoder(nn.Module):
         Updated edge features (B x V x V)
     """
     # Embed edge features
+    # To do : Node embedding에 Positional Embedding 사용 여부 Abilation Study
     del edge_index
-    x = self.node_embed(self.pos_embed(x))
+    x = self.node_embed(x)
     e = self.edge_embed(self.edge_pos_embed(graph))
     time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
     graph = torch.ones_like(graph).long()

@@ -31,7 +31,6 @@ class TSPModel(COMetaModel):
         data_file=os.path.join(self.data_params['storage_path'], self.data_params['training_split']),
         sparse_factor=self.model_params['sparse_factor'],
     )
-    print(f">>> Train dataset size: {len(self.train_dataset)} samples")
     self.test_dataset = TSPGraphDataset(
         data_file=os.path.join(self.data_params['storage_path'], self.data_params['test_split']),
         sparse_factor=self.model_params['sparse_factor'],

@@ -19,11 +19,11 @@ class TSPGraphDataset(torch.utils.data.Dataset):
 
   def __getitem__(self, idx):
     if self.sparse_factor <= 0:
-      time, machine, adj = self.data[idx]
+      pt, machine, adj = self.data[idx]
       idx = torch.tensor([idx], dtype=torch.long)
-      time = torch.from_numpy(time).float().flatten() # JM (Node수) 
+      pt = torch.from_numpy(pt).float().flatten().unsqueeze(1)  # JM (Node수)
       machine = torch.from_numpy(machine).long().flatten() # JM
-      adj = torch.from_numpy(adj).float() # JM x JM
-
-      features = torch.stack((time, machine), dim=1) 
-      return (idx, features, adj, machine)
+      adj = torch.from_numpy(adj).float() # JM x JM      
+      return (idx, pt, adj, machine) 
+    # idx, Node 정보 (Duration pt, Machine), 정답 Adj ,  Machine (Decoded Solution) 
+    # To do : Machine -> Operation Sequence 변경, Features (pt만 1차원으로 변경)
