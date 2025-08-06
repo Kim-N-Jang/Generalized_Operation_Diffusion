@@ -25,5 +25,5 @@ class TSPGraphDataset(torch.utils.data.Dataset):
       machine = torch.from_numpy(machine).long().flatten() # JM
       adj = torch.from_numpy(adj).float() # JM x JM      
       return (idx, pt, adj, machine) 
-    # idx, Node 정보 (Duration pt, Machine), 정답 Adj ,  Machine (Decoded Solution) 
-    # To do : Machine -> Operation Sequence 변경, Features (pt만 1차원으로 변경)
+    # idx, Node 정보 (pt), 정답 Adj ,  Machine 
+    # To do : Machine -> Operation Sequence(Decoded Solution) 변경

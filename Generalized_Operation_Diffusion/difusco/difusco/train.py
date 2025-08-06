@@ -13,8 +13,7 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.strategies.ddp import DDPStrategy
 from pytorch_lightning.utilities import rank_zero_info
 
-from pl_tsp_model import TSPModel
-
+from pl_jssp_model import JSSPModel
 
 ##########################################################################################
 # parameters
@@ -81,7 +80,7 @@ def main():
     epochs = trainer_params['epochs']
     project_name = wandb_params['project_name']
 
-    model_class = TSPModel
+    model_class = JSSPModel
     saving_mode = trainer_params['saving_mode']
         
     model = model_class(data_params=data_params,
