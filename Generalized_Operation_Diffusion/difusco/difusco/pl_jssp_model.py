@@ -199,16 +199,19 @@ class JSSPModel(pl.LightningModule):
   def categorical_training_step(self, batch, batch_idx):
     edge_index = None
 
-    _, points, adj_matrix, assigned_machine = batch
+    _, points, JobAdj, MachineAdj, assigned_machine = batch
+    adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
+    adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
+
 
     t = np.random.randint(1, self.diffusion.T + 1, points.shape[0]).astype(int)
    
     # Sample from diffusion
     adj_matrix_onehot = F.one_hot(adj_matrix.long(), num_classes=2).float()
 
-    invalid_noise = self.invalid_noise_label(assigned_machine)
-
-    xt = self.diffusion.sample(adj_matrix_onehot, t)-invalid_noise
+    invalid_noise = self.invalid_noise_label(assigned_machine, JobAdj)
+    
+    xt = self.diffusion.sample(adj_matrix_onehot, t) - invalid_noise
 
     xt = xt * 2 - 1
     xt = xt * (1.0 + 0.05 * torch.rand_like(xt))
@@ -229,12 +232,15 @@ class JSSPModel(pl.LightningModule):
     self.log("train/loss", loss)
     return loss
     
-  def invalid_noise_label(self, assigned_machine):
+  def invalid_noise_label(self, assigned_machine, JobAdj):
     batch_size, num_ops = assigned_machine.shape
     device = assigned_machine.device  # cuda 번호 가져오기
 
     # 머신 번호 비교 (다르면 1, 같으면 0)
     diff_machine = (assigned_machine[:, :, None] != assigned_machine[:, None, :]).long().to(device)
+    
+    # 선행 작업비교 (선행 아니면 1, 선행이면 0)
+    diff_machine = diff_machine * (1 - JobAdj.long().to(device))
 
     return diff_machine  # shape: (batch_size, num_ops, num_ops)
 
@@ -261,7 +267,9 @@ class JSSPModel(pl.LightningModule):
     np_edge_index = None
     device = batch[-1].device
 
-    real_batch_idx, points, adj_matrix, gt_tour = batch
+    real_batch_idx, points, JobAdj, MachineAdj, gt_tour = batch
+    adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
+    adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
     np_points = points.cpu().numpy()[0]
     np_gt_tour = gt_tour.cpu().numpy()[0]
     

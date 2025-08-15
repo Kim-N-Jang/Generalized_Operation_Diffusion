@@ -111,8 +111,8 @@ def RunAllInstances(ProcTime, Eligiblity):
     _, _, Schedule, _ = SolveJSSPInstance(ProcTime, Eligiblity)
     Schedule = np.array(Schedule, dtype=np.int32)
     InstanceData = (ProcTime, Eligiblity, Schedule)
-    CombinedAdj, _, _ = BuildAdjs(InstanceData)
-    return CombinedAdj
+    Jobadj, MachineAdj = BuildAdjs(InstanceData)
+    return Jobadj, MachineAdj
 
 # 전체 작업 수 기준으로 Job-Operation을 Task ID로 변환
 def GetTaskId(JobNum, Op, MachineNum):
@@ -151,8 +151,8 @@ def BuildAdjs(InstanceData):
             ToId = JobOpToTask[(NextJob, NextOp)]
             MachineAdj[ToId, FromId] = 1
 
-    CombinedAdj = np.logical_or(JobAdj, MachineAdj).astype(np.float32)
-    np.fill_diagonal(CombinedAdj, 1)  
+    # CombinedAdj = np.logical_or(JobAdj, MachineAdj).astype(np.float32)
+    # np.fill_diagonal(CombinedAdj, 1)
     # CombinedAdj = JobAdj(같은 Job의 선후행 연결) + MachineAdj(같은 Machine내에서의 연결)
-    return CombinedAdj, JobAdj, MachineAdj
+    return JobAdj, MachineAdj
 

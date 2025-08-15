@@ -5,9 +5,9 @@ def UniformInstanceGen(Nj, Nm, low, high):
     T = np.random.randint(low=low, high=high, size=(Nj, Nm))
     M = np.expand_dims(np.arange(1, Nm+1), axis=0).repeat(repeats=Nj, axis=0)
     M = PermuteRows(M)
-    Adj = RunAllInstances(T, M)
+    JobAdj, MachineAdj = RunAllInstances(T, M)
 
-    return T, M, Adj
+    return T, M, JobAdj, MachineAdj
 
 
 def PermuteRows(x):
