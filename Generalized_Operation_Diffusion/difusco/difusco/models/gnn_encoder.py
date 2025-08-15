@@ -67,73 +67,17 @@ class GNNLayer(nn.Module):
     def forward(self, h, e, graph, mode="residual", edge_index=None, sparse=False):
         """
     Args:
-        In Dense version:
-          h: Input node features (B x V x H)
-          e: Input edge features (B x V x V x H)
-          graph: Graph adjacency matrices (B x V x V)
-          mode: str
-        In Sparse version:
-          h: Input node features (V x H)
-          e: Input edge features (E x H)
-          graph: torch_sparse.SparseTensor
-          mode: str
-          edge_index: Edge indices (2 x E)
-        sparse: Whether to use sparse tensors (True/False)
+      h: Input node features (B x V x H)
+      e: Input edge features (B x V x V x H)
+      graph: Graph adjacency matrices (B x V x V)
+      mode: str
+
     Returns:
         Updated node and edge features
     """
 
         h_in = h
         e_in = e
-
-        if not sparse:
-            h, e = self.not_sparse_in_forward(h, e, graph, edge_index=None)
-        else:
-            h, e = self.sparse_in_forward(h, e, graph, edge_index=None)
-
-        # Make residual connection
-        if mode == "residual":
-            h = h_in + h
-            e = e_in + e
-
-        return h, e
-
-    def sparse_in_forward(self, h, e, graph, edge_index=None):
-
-        batch_size = None
-        num_nodes, hidden_dim = h.shape
-
-        # Linear transformations for node update
-        Uh = self.U(h)  # B x V x H
-
-        Vh = self.V(h[edge_index[1]])  # E x H
-
-        # Linear transformations for edge update and gating
-        Ah = self.A(h)  # B x V x H, source
-        Bh = self.B(h)  # B x V x H, target
-        Ce = self.C(e)  # B x V x V x H / E x H
-
-        # Update edge features and compute edge gates
-        e = Ah[edge_index[1]] + Bh[edge_index[0]] + Ce  # E x H
-
-        gates = torch.sigmoid(e)  # B x V x V x H / E x H
-
-        # Update node features
-        h = Uh + self.aggregate(Vh, graph, gates, edge_index=edge_index, sparse=sparse)  # B x V x H
-
-        # Normalize node features
-        h = self.norm_h(h) if self.norm_h else h
-
-        # Normalize edge features
-        e = self.norm_e(e) if self.norm_e else e
-
-        # Apply non-linearity
-        h = F.relu(h)
-        e = F.relu(e)
-
-        return h, e
-
-    def not_sparse_in_forward(self, h, e, graph, edge_index=None):
 
         batch_size, num_nodes, hidden_dim = h.shape
 
@@ -169,7 +113,13 @@ class GNNLayer(nn.Module):
         h = F.relu(h)
         e = F.relu(e)
 
+        # Make residual connection
+        if mode == "residual":
+            h = h_in + h
+            e = e_in + e
+
         return h, e
+
 
     def aggregate(self, Vh, graph, gates, mode=None, edge_index=None, sparse=False):
         """
@@ -196,29 +146,12 @@ class GNNLayer(nn.Module):
         # Vh[graph.unsqueeze(-1).expand_as(Vh)] = 0
 
         # Aggregate neighborhood features
-        if not sparse:
-            if (mode or self.aggregation) == "mean":
-                return torch.sum(Vh, dim=2) / (torch.sum(graph, dim=2).unsqueeze(-1).type_as(Vh))
-            elif (mode or self.aggregation) == "max":
-                return torch.max(Vh, dim=2)[0]
-            else:
-                return torch.sum(Vh, dim=2)
+        if (mode or self.aggregation) == "mean":
+            return torch.sum(Vh, dim=2) / (torch.sum(graph, dim=2).unsqueeze(-1).type_as(Vh))
+        elif (mode or self.aggregation) == "max":
+            return torch.max(Vh, dim=2)[0]
         else:
-            sparseVh = SparseTensor(
-                row=edge_index[0],
-                col=edge_index[1],
-                value=Vh,
-                sparse_sizes=(graph.size(0), graph.size(1))
-            )
-
-            if (mode or self.aggregation) == "mean":
-                return sparse_mean(sparseVh, dim=1)
-
-            elif (mode or self.aggregation) == "max":
-                return sparse_max(sparseVh, dim=1)
-
-            else:
-                return sparse_sum(sparseVh, dim=1)
+            return torch.sum(Vh, dim=2)
 
 
 class PositionEmbeddingSine(nn.Module):
@@ -337,8 +270,8 @@ class GNNEncoder(nn.Module):
         if not node_feature_only:
             self.pos_embed = PositionEmbeddingSine(hidden_dim // 2, normalize=True)
             self.edge_pos_embed = ScalarEmbeddingSine(hidden_dim, normalize=False)
-        # else:
-        #   self.pos_embed = ScalarEmbeddingSine1D(hidden_dim, normalize=False)
+        else:
+          self.pos_embed = ScalarEmbeddingSine1D(hidden_dim, normalize=False)
         self.time_embed = nn.Sequential(
             linear(hidden_dim, time_embed_dim),
             nn.ReLU(),
@@ -412,83 +345,9 @@ class GNNEncoder(nn.Module):
         e = self.out(e.permute((0, 3, 1, 2)))
         return e
 
-    def sparse_forward(self, x, graph, timesteps, edge_index):
-        """
-    Args:
-        x: Input node coordinates (V x 2)
-        graph: Graph edge features (E)
-        timesteps: Input edge timestep features (E)
-        edge_index: Adjacency matrix for the graph (2 x E)
-    Returns:
-        Updated edge features (E x H)
-    """
-        # Embed edge features
-        x = self.node_embed(self.pos_embed(x.unsqueeze(0)).squeeze(0))
-        e = self.edge_embed(self.edge_pos_embed(graph.expand(1, 1, -1)).squeeze())
-        time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
-        edge_index = edge_index.long()
-
-        x, e = self.sparse_encoding(x, e, edge_index, time_emb)
-        e = e.reshape((1, x.shape[0], -1, e.shape[-1])).permute((0, 3, 1, 2))
-        e = self.out(e).reshape(-1, edge_index.shape[1]).permute((1, 0))
-        return e
-
-    def sparse_forward_node_feature_only(self, x, timesteps, edge_index):
-        x = self.node_embed(self.pos_embed(x))
-        x_shape = x.shape
-        e = torch.zeros(edge_index.size(1), self.hidden_dim, device=x.device)
-        time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
-        edge_index = edge_index.long()
-
-        x, e = self.sparse_encoding(x, e, edge_index, time_emb)
-        x = x.reshape((1, x_shape[0], -1, x.shape[-1])).permute((0, 3, 1, 2))
-        x = self.out(x).reshape(-1, x_shape[0]).permute((1, 0))
-        return x
-
-    def sparse_encoding(self, x, e, edge_index, time_emb):
-        adj_matrix = SparseTensor(
-            row=edge_index[0],
-            col=edge_index[1],
-            value=torch.ones_like(edge_index[0].float()),
-            sparse_sizes=(x.shape[0], x.shape[0]),
-        )
-        adj_matrix = adj_matrix.to(x.device)
-
-        for layer, time_layer, out_layer in zip(self.layers, self.time_embed_layers, self.per_layer_out):
-            x_in, e_in = x, e
-
-            if self.use_activation_checkpoint:
-                single_time_emb = time_emb[:1]
-
-                run_sparse_layer_fn = functools.partial(
-                    run_sparse_layer,
-                    add_time_on_edge=not self.node_feature_only
-                )
-
-                out = activation_checkpoint.checkpoint(
-                    run_sparse_layer_fn(layer, time_layer, out_layer, adj_matrix, edge_index),
-                    x_in, e_in, single_time_emb
-                )
-                x = out[0]
-                e = out[1]
-            else:
-                x, e = layer(x_in, e_in, adj_matrix, mode="direct", edge_index=edge_index, sparse=True)
-                if not self.node_feature_only:
-                    e = e + time_layer(time_emb)
-                else:
-                    x = x + time_layer(time_emb)
-                x = x_in + x
-                e = e_in + out_layer(e)
-        return x, e
-
     def forward(self, x, timesteps, graph=None, edge_index=None):
         if self.node_feature_only:
-            if self.sparse:
-                return self.sparse_forward_node_feature_only(x, timesteps, edge_index)
-            else:
-                raise NotImplementedError
+            raise NotImplementedError
         else:
-            if self.sparse:
-                return self.sparse_forward(x, graph, timesteps, edge_index)
-            else:
-                return self.dense_forward(x, graph, timesteps, edge_index)
+            return self.dense_forward(x, graph, timesteps, edge_index)
+

@@ -12,7 +12,7 @@ from pytorch_lightning.utilities import rank_zero_info
 from torch_geometric.data import DataLoader as GraphDataLoader
 from models.gnn_encoder import GNNEncoder
 from utils.lr_schedulers import get_schedule_fn
-from utils.diffusion_schedulers import CategoricalDiffusion, GaussianDiffusion, InferenceSchedule
+from utils.diffusion_schedulers import CategoricalDiffusion, InferenceSchedule
 from co_datasets.tsp_graph_dataset import TSPGraphDataset
 from utils.tsp_utils import TSPEvaluator, batched_two_opt_torch, merge_tours
 
@@ -29,21 +29,13 @@ class JSSPModel(pl.LightningModule):
     self.data_params = data_params
     self.trainer_params = trainer_params
     self.optimizer_params = optimizer_params
-    self.diffusion_type = self.trainer_params['diffusion_type']
     self.diffusion_schedule = self.trainer_params['diffusion_schedule']
     self.diffusion_steps = self.trainer_params['diffusion_steps']
     self.sparse = self.model_params['sparse_factor'] > 0 or node_feature_only
 
-    if self.diffusion_type == 'gaussian':
-      out_channels = 1
-      self.diffusion = GaussianDiffusion(
-          T=self.diffusion_steps, schedule=self.diffusion_schedule)
-    elif self.diffusion_type == 'categorical':
-      out_channels = 2
-      self.diffusion = CategoricalDiffusion(
-          T=self.diffusion_steps, schedule=self.diffusion_schedule)
-    else:
-      raise ValueError(f"Unknown diffusion type {self.diffusion_type}")
+    out_channels = 2
+    self.diffusion = CategoricalDiffusion(
+      T=self.diffusion_steps, schedule=self.diffusion_schedule)
 
     self.model = GNNEncoder(
         n_layers=self.model_params['n_layers'],
@@ -169,35 +161,6 @@ class JSSPModel(pl.LightningModule):
       xt = xt.reshape(-1)
     return xt
 
-  def gaussian_posterior(self, target_t, t, pred, xt):
-    """Sample (or deterministically denoise) from the Gaussian posterior for a given time step.
-       See https://arxiv.org/pdf/2010.02502.pdf for details.
-    """
-    diffusion = self.diffusion
-    if target_t is None:
-      target_t = t - 1
-    else:
-      target_t = torch.from_numpy(target_t).view(1)
-
-    atbar = diffusion.alphabar[t]
-    atbar_target = diffusion.alphabar[target_t]
-
-    if self.trainer_params['inference_trick'] is None or t <= 1:
-      # Use DDPM posterior
-      at = diffusion.alpha[t]
-      z = torch.randn_like(xt)
-      atbar_prev = diffusion.alphabar[t - 1]
-      beta_tilde = diffusion.beta[t - 1] * (1 - atbar_prev) / (1 - atbar)
-
-      xt_target = (1 / np.sqrt(at)).item() * (xt - ((1 - at) / np.sqrt(1 - atbar)).item() * pred)
-      xt_target = xt_target + np.sqrt(beta_tilde).item() * z
-    elif self.trainer_params['inference_trick'] == 'ddim':
-      xt_target = np.sqrt(atbar_target / atbar).item() * (xt - np.sqrt(1 - atbar).item() * pred)
-      xt_target = xt_target + np.sqrt(1 - atbar_target).item() * pred
-    else:
-      raise ValueError('Unknown inference trick {}'.format(self.trainer_params['inference_trick']))
-    return xt_target
-
   def duplicate_edge_index(self, edge_index, num_nodes, device):
     """Duplicate the edge index (in sparse graphs) for parallel sampling."""
     edge_index = edge_index.reshape((2, 1, -1))
@@ -280,38 +243,8 @@ class JSSPModel(pl.LightningModule):
     self.log("train/loss", loss)
     return loss
 
-  def gaussian_training_step(self, batch, batch_idx):
-    # if self.sparse: #sparse
-    #   # TODO: Implement Gaussian diffusion with sparse graphs
-    #   raise ValueError("DIFUSCO with sparse graphs are not supported for Gaussian diffusion")
-    _, points, adj_matrix, _ = batch
-
-    adj_matrix = adj_matrix * 2 - 1
-    adj_matrix = adj_matrix * (1.0 + 0.05 * torch.rand_like(adj_matrix))
-    # Sample from diffusion
-    t = np.random.randint(1, self.diffusion.T + 1, adj_matrix.shape[0]).astype(int)
-    xt, epsilon = self.diffusion.sample(adj_matrix, t)
-
-    t = torch.from_numpy(t).float().view(adj_matrix.shape[0])
-    # Denoise
-    epsilon_pred = self.forward(
-        points.float().to(adj_matrix.device),
-        xt.float().to(adj_matrix.device),
-        t.float().to(adj_matrix.device),
-        None,
-    )
-    epsilon_pred = epsilon_pred.squeeze(1)
-
-    # Compute loss
-    loss = F.mse_loss(epsilon_pred, epsilon.float())
-    self.log("train/loss", loss)
-    return loss
-
   def training_step(self, batch, batch_idx):
-    if self.diffusion_type == 'gaussian':
-      return self.gaussian_training_step(batch, batch_idx)
-    elif self.diffusion_type == 'categorical':
-      return self.categorical_training_step(batch, batch_idx)
+    return self.categorical_training_step(batch, batch_idx)
 
   def categorical_denoise_step(self, points, xt, t, device, edge_index=None, target_t=None):
     with torch.no_grad():
@@ -329,19 +262,6 @@ class JSSPModel(pl.LightningModule):
       #   x0_pred_prob = x0_pred.reshape((1, points.shape[0], -1, 2)).softmax(dim=-1)
 
       xt = self.categorical_posterior(target_t, t, x0_pred_prob, xt)
-      return xt
-
-  def gaussian_denoise_step(self, points, xt, t, device, edge_index=None, target_t=None):
-    with torch.no_grad():
-      t = torch.from_numpy(t).view(1)
-      pred = self.forward(
-          points.float().to(device),
-          xt.float().to(device),
-          t.float().to(device),
-          edge_index.long().to(device) if edge_index is not None else None,
-      )
-      pred = pred.squeeze(1)
-      xt = self.gaussian_posterior(target_t, t, pred, xt)
       return xt
 
   def test_step(self, batch, batch_idx, split='test'):
@@ -379,19 +299,10 @@ class JSSPModel(pl.LightningModule):
     for _ in range(self.trainer_params['sequential_sampling']):
       xt = torch.randn_like(adj_matrix.float())
       if self.trainer_params['parallel_sampling'] > 1:
-        if not self.sparse:
-          xt = xt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
-        # else: # Sparse
-        #   xt = xt.repeat(self.trainer_params['parallel_sampling'], 1)
+        xt = xt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
         xt = torch.randn_like(xt)
 
-      if self.diffusion_type == 'gaussian':
-        xt.requires_grad = True
-      else:
-        xt = (xt > 0).long()
-
-      # if self.sparse:
-      #   xt = xt.reshape(-1)
+      xt = (xt > 0).long()
 
       steps = self.trainer_params['inference_diffusion_steps']
       time_schedule = InferenceSchedule(inference_schedule=self.trainer_params['inference_schedule'],
@@ -403,17 +314,12 @@ class JSSPModel(pl.LightningModule):
         t1 = np.array([t1]).astype(int)
         t2 = np.array([t2]).astype(int)
 
-        if self.diffusion_type == 'gaussian':
-          xt = self.gaussian_denoise_step(
-              points, xt, t1, device, edge_index, target_t=t2)
-        else:
-          xt = self.categorical_denoise_step(
-              points, xt, t1, device, edge_index, target_t=t2)
+        xt = self.categorical_denoise_step(
+          points, xt, t1, device, edge_index, target_t=t2)
 
-      if self.diffusion_type == 'gaussian':
-        adj_mat = xt.cpu().detach().numpy() * 0.5 + 0.5
-      else:
-        adj_mat = xt.float().cpu().detach().numpy() + 1e-6
+
+      adj_mat = xt.float().cpu().detach().numpy() + 1e-6
+
       if self.model_params['save_numpy_heatmap']:
         self.run_save_numpy_heatmap(adj_mat, np_points, real_batch_idx, split)
     return adj_mat

@@ -59,7 +59,6 @@ optimizer_params = {
 
 trainer_params = {
     'fp16': True,
-    'diffusion_type': 'gaussian',
     'diffusion_steps': 1000,
     'diffusion_schedule': 'linear',
     'inference_diffusion_steps': 1000,
