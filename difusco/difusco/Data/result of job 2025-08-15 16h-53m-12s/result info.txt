@@ -1,0 +1,3 @@
+{'success': True, 'stopMsg': 'The algotirhm stepped because it exceeded the trapped count limit.', 'Vars': array([[0.81877796, 0.64650968, 0.07323459, 0.93867019, 0.02936617,
+        0.76113539, 0.91265327, 0.58937178, 0.0527272 , 0.93817376,
+        0.81599623, 0.55248842, 0.79512279, 0.32452867, 0.26139432]]), 'ObjV': array([[408]]), 'CV': None, 'executeTime': 0.4117166996002197, 'nfev': 30300, 'startTime': '2025-08-15 16h-53m-12s', 'endTime': '2025-08-15 16h-53m-13s'}

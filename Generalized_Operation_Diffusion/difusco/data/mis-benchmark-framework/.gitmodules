@@ -1,3 +1,0 @@
-[submodule "solvers/dgl_treesearch/reducelib/KaMIS"]
-	path = solvers/dgl_treesearch/reducelib/KaMIS
-	url = https://github.com/KarlsruheMIS/KaMIS
