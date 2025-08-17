@@ -1,0 +1,52 @@
+name: difusco_win
+channels:
+  - pytorch
+  - defaults
+
+dependencies:
+  # Python 및 과학·ML 스택
+  - python=3.9
+  - numpy=1.21.*
+  - scipy=1.7.*
+  - scikit-learn=1.0.*
+  - matplotlib=3.5.*
+  - networkx=2.6.*
+  - pillow
+  - tqdm
+  - requests
+  - pyyaml
+  - typing_extensions
+
+  # CUDA / PyTorch
+  - cudatoolkit=11.3
+  - pytorch=1.11.0
+  - torchvision=0.12.0
+  - torchaudio=0.11.0
+
+  # pip 자체 버전 고정 (24.1 이상에서는 메타데이터 에러 발생)
+  - pip=22.3.1
+
+  # pip로 설치할 패키지들
+  - pip:
+      # PyG 전용 윈도우 휠 저장소
+      - --find-links https://data.pyg.org/whl/torch-1.11.0+cu113.html
+
+      # PyG 확장 모듈
+      - torch-scatter==2.0.9
+      - torch-sparse==0.6.15
+      - torch-cluster==1.6.0
+      - torch-spline-conv==1.2.1
+
+      # torch-geometric 본체 (pyg-lib 없이 설치 가능)
+      - torch-geometric==2.3.0
+
+      # pytorch-lightning (==1.7.7)
+      - pytorch-lightning==1.7.7
+
+      # 기타 pip 패키지
+      - torchmetrics==0.11.0
+      - wandb==0.13.9
+      - tsplib95==0.7.1
+      - python-sat==0.1.7.dev25
+      - lkh==1.1.1
+      - geatpy==2.7.0
