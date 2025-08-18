@@ -94,7 +94,7 @@ def SolveJSSPInstance(ProcTime, MachOrder, MaxGen=300, PopSize=300):
         trappedValue=1e-6,
         maxTrappedCount=100
     )
-    Res = ea.optimize(Algorithm, verbose=False, drawing=0, outputMsg=False)
+    Res = ea.optimize(Algorithm, verbose=False, drawing=0, outputMsg=False, saveFlag=False)
 
     BestKeys = Res['Vars'][0]
     Makespan, Schedule = DecodeReadylist(
