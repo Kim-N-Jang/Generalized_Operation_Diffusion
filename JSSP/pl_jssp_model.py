@@ -14,7 +14,7 @@ from models.gnn_encoder import GNNEncoder
 from utils.lr_schedulers import get_schedule_fn
 from utils.diffusion_schedulers import CategoricalDiffusion, InferenceSchedule
 from co_datasets.tsp_graph_dataset import TSPGraphDataset
-from utils.tsp_utils import TSPEvaluator, batched_two_opt_torch, merge_tours
+from utils.tsp_utils import TSPEvaluator, merge_tours
 
 
 class JSSPModel(pl.LightningModule):
@@ -158,8 +158,6 @@ class JSSPModel(pl.LightningModule):
     else:
       xt = sum_x_t_target_prob.clamp(min=0)
 
-    if self.sparse:
-      xt = xt.reshape(-1)
     return xt
 
   def duplicate_edge_index(self, edge_index, num_nodes, device):
@@ -209,9 +207,13 @@ class JSSPModel(pl.LightningModule):
     # Sample from diffusion
     adj_matrix_onehot = F.one_hot(adj_matrix.long(), num_classes=2).float()
 
-    invalid_noise = self.invalid_noise_label(assigned_machine, JobAdj)
+    valid_noise = self.invalid_noise_label(assigned_machine, JobAdj)
     
-    xt = self.diffusion.sample(adj_matrix_onehot, t) - invalid_noise
+    xt = self.diffusion.sample(adj_matrix_onehot, t)
+
+    #노이즈 제어
+    xt = xt * valid_noise
+    xt[valid_noise == 1] = 0
 
     xt = xt * 2 - 1
     xt = xt * (1.0 + 0.05 * torch.rand_like(xt))
@@ -228,7 +230,7 @@ class JSSPModel(pl.LightningModule):
 
     # Compute loss
     loss_func = nn.CrossEntropyLoss()
-    loss = loss_func(x0_pred, adj_matrix.long())
+    loss = loss_func(x0_pred, JobAdj.long())
     self.log("train/loss", loss)
     return loss
     
@@ -236,13 +238,13 @@ class JSSPModel(pl.LightningModule):
     batch_size, num_ops = assigned_machine.shape
     device = assigned_machine.device  # cuda 번호 가져오기
 
-    # 머신 번호 비교 (다르면 1, 같으면 0)
-    diff_machine = (assigned_machine[:, :, None] != assigned_machine[:, None, :]).long().to(device)
+    # 머신 번호 비교 (같으면 1, 다르면 0)
+    valid_edge = (assigned_machine[:, :, None] == assigned_machine[:, None, :]).long().to(device)
     
-    # 선행 작업비교 (선행 아니면 1, 선행이면 0)
-    diff_machine = diff_machine * (1 - JobAdj.long().to(device))
+    # 선행 작업비교 (선행 1, 비선행 0)
+    valid_edge = valid_edge + JobAdj.long().to(device)
 
-    return diff_machine  # shape: (batch_size, num_ops, num_ops)
+    return valid_edge  # shape: (batch_size, num_ops, num_ops)
 
   def training_step(self, batch, batch_idx):
     return self.categorical_training_step(batch, batch_idx)
@@ -307,40 +309,41 @@ class JSSPModel(pl.LightningModule):
       if self.model_params['save_numpy_heatmap']:
         self.run_save_numpy_heatmap(adj_mat, np_points, real_batch_idx, split)
 
-    return adj_mat
+    # return adj_mat
   
     # To do : Adj 로 Solution 도출하기  
-    ## Difusco : adj -> merge_tours, 2-opt -> tour solution  
-    #   tours, merge_iterations = merge_tours(
-    #       adj_mat, np_points, np_edge_index,
-    #       sparse_graph=self.sparse,
-    #       parallel_sampling=self.trainer_params['parallel_sampling'],
-    #   )
+    # Difusco : adj -> merge_tours, 2-opt -> tour solution  
+      tours, merge_iterations = merge_tours(
+          adj_mat, np_points, np_edge_index,
+          sparse_graph=self.sparse,
+          parallel_sampling=self.trainer_params['parallel_sampling'],
+      )
 
-    #   # Refine using 2-opt
-    #   solved_tours, ns = batched_two_opt_torch(
-    #       np_points.astype("float64"), np.array(tours).astype('int64'),
-    #       max_iterations=self.model_params['two_opt_iterations'], device=device)
-    #   stacked_tours.append(solved_tours)
+      # Refine using 2-opt
+      # solved_tours, ns = batched_two_opt_torch(
+      #     np_points.astype("float64"), np.array(tours).astype('int64'),
+      #     max_iterations=self.model_params['two_opt_iterations'], device=device)
+      # stacked_tours.append(solved_tours)
+      stacked_tours.append(tours)
 
-    # solved_tours = np.concatenate(stacked_tours, axis=0)
+    solved_tours = np.concatenate(stacked_tours, axis=0)
 
-    # tsp_solver = TSPEvaluator(np_points)
-    # gt_cost = tsp_solver.evaluate(np_gt_tour)
+    tsp_solver = TSPEvaluator(np_points)
+    gt_cost = tsp_solver.evaluate(np_gt_tour)
 
-    # total_sampling = self.trainer_params['parallel_sampling'] * self.trainer_params['sequential_sampling']
-    # all_solved_costs = [tsp_solver.evaluate(solved_tours[i]) for i in range(total_sampling)]
-    # best_solved_cost = np.min(all_solved_costs)
+    total_sampling = self.trainer_params['parallel_sampling'] * self.trainer_params['sequential_sampling']
+    all_solved_costs = [tsp_solver.evaluate(solved_tours[i]) for i in range(total_sampling)]
+    best_solved_cost = np.min(all_solved_costs)
 
-    # metrics = {
-    #     f"{split}/gt_cost": gt_cost,
-    #     f"{split}/2opt_iterations": ns,
-    #     f"{split}/merge_iterations": merge_iterations,
-    # }
-    # for k, v in metrics.items():
-    #   self.log(k, v, on_epoch=True, sync_dist=True)
-    # self.log(f"{split}/solved_cost", best_solved_cost, prog_bar=True, on_epoch=True, sync_dist=True)
-    # return metrics
+    metrics = {
+        f"{split}/gt_cost": gt_cost,
+        f"{split}/2opt_iterations": ns,
+        f"{split}/merge_iterations": merge_iterations,
+    }
+    for k, v in metrics.items():
+      self.log(k, v, on_epoch=True, sync_dist=True)
+    self.log(f"{split}/solved_cost", best_solved_cost, prog_bar=True, on_epoch=True, sync_dist=True)
+    return metrics
 
   def run_save_numpy_heatmap(self, adj_mat, np_points, real_batch_idx, split):
     if self.trainer_params['parallel_sampling'] > 1 or self.trainer_params['sequential_sampling'] > 1:

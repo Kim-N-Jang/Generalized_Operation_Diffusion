@@ -2,7 +2,7 @@
 # import
 
 import os
-#os.environ["CUDA_VISIBLE_DEVICES"] = "2"  
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"  
 from argparse import ArgumentParser
 
 import torch
@@ -111,8 +111,8 @@ def main():
 
     trainer = Trainer(
     accelerator="auto",
-    #devices=1,
-    devices=torch.cuda.device_count() if torch.cuda.is_available() else None,
+    devices=1,
+    # devices=torch.cuda.device_count() if torch.cuda.is_available() else None,
     max_epochs=epochs,
     callbacks=[TQDMProgressBar(refresh_rate=20), checkpoint_callback, lr_callback],
     logger=wandb_logger,
