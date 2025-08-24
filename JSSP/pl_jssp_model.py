@@ -14,7 +14,7 @@ from models.gnn_encoder import GNNEncoder
 from utils.lr_schedulers import get_schedule_fn
 from utils.diffusion_schedulers import CategoricalDiffusion, InferenceSchedule
 from co_datasets.tsp_graph_dataset import TSPGraphDataset
-from utils.tsp_utils import TSPEvaluator, merge_tours
+from utils.tsp_utils import JSSPEvaluator
 
 
 class JSSPModel(pl.LightningModule):
@@ -258,9 +258,7 @@ class JSSPModel(pl.LightningModule):
           t.float().to(device),
           edge_index.long().to(device) if edge_index is not None else None,
       )
-
       x0_pred_prob = x0_pred.permute((0, 2, 3, 1)).contiguous().softmax(dim=-1)
-
       xt = self.categorical_posterior(target_t, t, x0_pred_prob, xt)
       return xt
 
@@ -269,31 +267,26 @@ class JSSPModel(pl.LightningModule):
     np_edge_index = None
     device = batch[-1].device
 
-    real_batch_idx, points, JobAdj, MachineAdj, gt_tour = batch
+    real_batch_idx, pt, JobAdj, MachineAdj, machine = batch
     adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
     adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
-    np_points = points.cpu().numpy()[0]
-    np_gt_tour = gt_tour.cpu().numpy()[0]
+    np_pt = pt.cpu().numpy()[0]
+    np_machine = machine.cpu().numpy()[0]
     
+    num_m = len(set(np_machine.tolist()))
+    num_j = len(np_pt) // num_m  
 
-    stacked_tours = []
-    ns, merge_iterations = 0, 0
-
-    if self.trainer_params['parallel_sampling'] > 1:
-      points = points.repeat(self.trainer_params['parallel_sampling'], 1, 1)
+    pt = pt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
 
     for _ in range(self.trainer_params['sequential_sampling']):
       xt = torch.randn_like(adj_matrix.float())
-      if self.trainer_params['parallel_sampling'] > 1:
-        xt = xt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
-        xt = torch.randn_like(xt)
-
+      xt = xt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
+      xt = torch.randn_like(xt)
       xt = (xt > 0).long()
 
       steps = self.trainer_params['inference_diffusion_steps']
       time_schedule = InferenceSchedule(inference_schedule=self.trainer_params['inference_schedule'],
                                         T=self.diffusion.T, inference_T=steps)
-
       # Diffusion iterations
       for i in range(steps):
         t1, t2 = time_schedule(i)
@@ -301,48 +294,28 @@ class JSSPModel(pl.LightningModule):
         t2 = np.array([t2]).astype(int)
 
         xt = self.categorical_denoise_step(
-          points, xt, t1, device, edge_index, target_t=t2)
+          pt, xt, t1, device, edge_index, target_t=t2)
 
 
       adj_mat = xt.float().cpu().detach().numpy() + 1e-6
-
       if self.model_params['save_numpy_heatmap']:
-        self.run_save_numpy_heatmap(adj_mat, np_points, real_batch_idx, split)
-
-    # return adj_mat
-  
+        self.run_save_numpy_heatmap(adj_mat, np_pt, real_batch_idx, split)
     # To do : Adj 로 Solution 도출하기  
     # Difusco : adj -> merge_tours, 2-opt -> tour solution  
-      tours, merge_iterations = merge_tours(
-          adj_mat, np_points, np_edge_index,
-          sparse_graph=self.sparse,
-          parallel_sampling=self.trainer_params['parallel_sampling'],
-      )
-
-      # Refine using 2-opt
-      # solved_tours, ns = batched_two_opt_torch(
-      #     np_points.astype("float64"), np.array(tours).astype('int64'),
-      #     max_iterations=self.model_params['two_opt_iterations'], device=device)
-      # stacked_tours.append(solved_tours)
-      stacked_tours.append(tours)
-
-    solved_tours = np.concatenate(stacked_tours, axis=0)
-
-    tsp_solver = TSPEvaluator(np_points)
-    gt_cost = tsp_solver.evaluate(np_gt_tour)
-
-    total_sampling = self.trainer_params['parallel_sampling'] * self.trainer_params['sequential_sampling']
-    all_solved_costs = [tsp_solver.evaluate(solved_tours[i]) for i in range(total_sampling)]
-    best_solved_cost = np.min(all_solved_costs)
+    makespan, schedule = JSSPEvaluator(
+        adj_mat,
+        np_pt,
+        np_machine,
+        num_j
+    )
 
     metrics = {
-        f"{split}/gt_cost": gt_cost,
-        f"{split}/2opt_iterations": ns,
-        f"{split}/merge_iterations": merge_iterations,
+        f"{split}/GA": 0.0,
+        f"{split}/Diffusion": makespan,
     }
     for k, v in metrics.items():
-      self.log(k, v, on_epoch=True, sync_dist=True)
-    self.log(f"{split}/solved_cost", best_solved_cost, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log(k, v, on_epoch=True, sync_dist=True)
+    self.log(f"{split}/solved_cost", makespan, prog_bar=True, on_epoch=True, sync_dist=True)
     return metrics
 
   def run_save_numpy_heatmap(self, adj_mat, np_points, real_batch_idx, split):
