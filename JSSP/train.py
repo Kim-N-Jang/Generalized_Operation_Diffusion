@@ -100,7 +100,7 @@ def main():
     print(wandb_logger._id)
     
     checkpoint_callback = ModelCheckpoint(
-        monitor='val/solved_cost', mode=saving_mode,
+        monitor='val/RPD', mode=saving_mode,
         save_top_k=3, save_last=True,
         dirpath=os.path.join(wandb_logger.save_dir,
                             wandb_params['wandb_logger_name'],

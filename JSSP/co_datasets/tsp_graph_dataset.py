@@ -19,12 +19,13 @@ class TSPGraphDataset(torch.utils.data.Dataset):
 
   def __getitem__(self, idx):
     if self.sparse_factor <= 0:
-      pt, machine, JobAdj, MachineAdj = self.data[idx]
+      Pt, Machine, JobAdj, MachineAdj, Makespan = self.data[idx]
       idx = torch.tensor([idx], dtype=torch.long)
-      pt = torch.from_numpy(pt).float().flatten().unsqueeze(1)  # JM (Node수)
-      machine = torch.from_numpy(machine).long().flatten() # JM
+      Pt = torch.from_numpy(Pt).float().flatten().unsqueeze(1)  # JM (Node수)
+      Machine = torch.from_numpy(Machine).long().flatten() # JM
       JobAdj = torch.from_numpy(JobAdj).float() # JM x JM
       MachineAdj = torch.from_numpy(MachineAdj).float() # JM x JM
-      return (idx, pt, JobAdj, MachineAdj, machine)
-    # idx, Node 정보 (pt), 정답 Adj ,  Machine 
+      Makespan = torch.tensor(Makespan)
+      return (idx, Pt, JobAdj, MachineAdj, Machine, Makespan)
+    # idx, Node 정보 (Pt), 정답 Adj ,  Machine 
     # To do : Operation Sequence(Decoded Solution) 추가

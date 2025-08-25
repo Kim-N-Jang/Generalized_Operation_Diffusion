@@ -14,7 +14,7 @@ from models.gnn_encoder import GNNEncoder
 from utils.lr_schedulers import get_schedule_fn
 from utils.diffusion_schedulers import CategoricalDiffusion, InferenceSchedule
 from co_datasets.tsp_graph_dataset import TSPGraphDataset
-from utils.tsp_utils import JSSPEvaluator
+from utils.JSSP_utils import JSSPEvaluator
 
 
 class JSSPModel(pl.LightningModule):
@@ -197,7 +197,7 @@ class JSSPModel(pl.LightningModule):
   def categorical_training_step(self, batch, batch_idx):
     edge_index = None
 
-    _, points, JobAdj, MachineAdj, assigned_machine = batch
+    _, points, JobAdj, MachineAdj, assigned_machine, _ = batch
     adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
     adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
 
@@ -267,12 +267,13 @@ class JSSPModel(pl.LightningModule):
     np_edge_index = None
     device = batch[-1].device
 
-    real_batch_idx, pt, JobAdj, MachineAdj, machine = batch
+    real_batch_idx, pt, JobAdj, MachineAdj, machine, GA_makespan = batch
     adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
     adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
     np_pt = pt.cpu().numpy()[0]
     np_machine = machine.cpu().numpy()[0]
-    
+    GA_makespan = GA_makespan.float()
+
     num_m = len(set(np_machine.tolist()))
     num_j = len(np_pt) // num_m  
 
@@ -296,12 +297,10 @@ class JSSPModel(pl.LightningModule):
         xt = self.categorical_denoise_step(
           pt, xt, t1, device, edge_index, target_t=t2)
 
-
       adj_mat = xt.float().cpu().detach().numpy() + 1e-6
       if self.model_params['save_numpy_heatmap']:
         self.run_save_numpy_heatmap(adj_mat, np_pt, real_batch_idx, split)
-    # To do : Adj 로 Solution 도출하기  
-    # Difusco : adj -> merge_tours, 2-opt -> tour solution  
+
     makespan, schedule = JSSPEvaluator(
         adj_mat,
         np_pt,
@@ -310,15 +309,18 @@ class JSSPModel(pl.LightningModule):
     )
 
     metrics = {
-        f"{split}/GA": 0.0,
+        f"{split}/GA": GA_makespan,
         f"{split}/Diffusion": makespan,
     }
     for k, v in metrics.items():
         self.log(k, v, on_epoch=True, sync_dist=True)
-    self.log(f"{split}/solved_cost", makespan, prog_bar=True, on_epoch=True, sync_dist=True)
+    RPD = (makespan - GA_makespan) / GA_makespan * 100        
+    self.log(f"{split}/RPD", RPD, prog_bar=True, on_epoch=True, sync_dist=True)
+    # Terminal Log
+    # print("RPD",RPD)
     return metrics
 
-  def run_save_numpy_heatmap(self, adj_mat, np_points, real_batch_idx, split):
+  def run_save_numpy_heatmap(self, adj_mat, np_pt, real_batch_idx, split):
     if self.trainer_params['parallel_sampling'] > 1 or self.trainer_params['sequential_sampling'] > 1:
       raise NotImplementedError("Save numpy heatmap only support single sampling")
     exp_save_dir = os.path.join(self.logger.save_dir, self.logger.name, self.logger.version)
@@ -327,7 +329,7 @@ class JSSPModel(pl.LightningModule):
     os.makedirs(heatmap_path, exist_ok=True)
     real_batch_idx = real_batch_idx.cpu().numpy().reshape(-1)[0]
     np.save(os.path.join(heatmap_path, f"{split}-heatmap-{real_batch_idx}.npy"), adj_mat)
-    np.save(os.path.join(heatmap_path, f"{split}-points-{real_batch_idx}.npy"), np_points)
+    np.save(os.path.join(heatmap_path, f"{split}-points-{real_batch_idx}.npy"), np_pt)
 
   def validation_step(self, batch, batch_idx):
     return self.test_step(batch, batch_idx, split='val')

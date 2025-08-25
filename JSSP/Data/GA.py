@@ -108,11 +108,11 @@ def SolveJSSPInstance(ProcTime, MachOrder, MaxGen=300, PopSize=300):
 
 # 하나의 인스턴스를 디코딩 후 adj 행렬 생성
 def RunAllInstances(ProcTime, Eligiblity):
-    _, _, Schedule, _ = SolveJSSPInstance(ProcTime, Eligiblity)
+    Makespan, _, Schedule, _ = SolveJSSPInstance(ProcTime, Eligiblity)
     Schedule = np.array(Schedule, dtype=np.int32)
     InstanceData = (ProcTime, Eligiblity, Schedule)
     Jobadj, MachineAdj = BuildAdjs(InstanceData)
-    return Jobadj, MachineAdj
+    return Jobadj, MachineAdj, Makespan
 
 # 전체 작업 수 기준으로 Job-Operation을 Task ID로 변환
 def GetTaskId(JobNum, Op, MachineNum):

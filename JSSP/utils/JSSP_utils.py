@@ -52,7 +52,6 @@ def JSSPEvaluator(adj_mat, np_pt, np_machine, num_jobs):
         ready = set(j * num_m for j in range(num_jobs))
         sched = [None] * n
         scheduled = 0
-
         while scheduled < n:
             candidates = []
             for op in ready:
@@ -73,11 +72,11 @@ def JSSPEvaluator(adj_mat, np_pt, np_machine, num_jobs):
             end   = start + pt[op]
             sched[op] = {"op": op, "job": j, "machine": m, "start": start, "end": end}
 
-            scheduled            += 1
+            scheduled += 1
             ready.discard(op)
-            machine_fin[m]        = end
-            job_fin[j]            = end
-            last_on_machine[m]    = op
+            machine_fin[m] = end
+            job_fin[j] = end
+            last_on_machine[m] = op
 
             if (op + 1) % num_m != 0:
                 ready.add(op + 1)
