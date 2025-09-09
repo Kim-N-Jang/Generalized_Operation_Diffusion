@@ -264,7 +264,13 @@ class GNNEncoder(nn.Module):
         self.node_feature_only = node_feature_only
         self.hidden_dim = hidden_dim
         time_embed_dim = hidden_dim // 2
-        self.node_embed = nn.Linear(1, hidden_dim)
+
+        self.job_proj  = nn.Sequential(nn.Linear(1, hidden_dim), nn.ReLU(inplace=True))  
+        self.mach_proj = nn.Sequential(nn.Linear(1, hidden_dim), nn.ReLU(inplace=True))  
+        self.fuse_norm = nn.LayerNorm(hidden_dim, elementwise_affine=True)               
+        self.fuse_drop = nn.Dropout(p=0.1)                                               
+        self.node_embed = nn.Identity()         
+        #self.node_embed = nn.Linear(1, hidden_dim)
         self.edge_embed = nn.Linear(hidden_dim, hidden_dim)
 
         if not node_feature_only:
@@ -324,7 +330,12 @@ class GNNEncoder(nn.Module):
         # Embed edge features
         # To do : Node embedding에 Positional Embedding 사용 여부 Abilation Study
         del edge_index
-        x = self.node_embed(x)
+        job_norm  = x[..., 0:1].float()                       # (B,V,1)  
+        mach_norm = x[..., 1:2].float()                       # (B,V,1)  
+        x = self.job_proj(job_norm) + self.mach_proj(mach_norm)          
+        x = self.fuse_drop(self.fuse_norm(x))                            
+        
+        #x = self.node_embed(x)
         e = self.edge_embed(self.edge_pos_embed(graph))
         time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
         graph = torch.ones_like(graph).long()

@@ -106,7 +106,7 @@ class JSSPModel(pl.LightningModule):
     else:
       optimizer = torch.optim.AdamW(
           self.model.parameters(), lr=self.optimizer_params['optimizer']['lr'], weight_decay=self.optimizer_params['optimizer']['weight_decay'])
-      scheduler = get_schedule_fn(self.aoptimizer_params['lr_scheduler'], self.get_total_num_training_steps())(optimizer)
+      scheduler = get_schedule_fn(self.optimizer_params['lr_scheduler'], self.get_total_num_training_steps())(optimizer)
 
       return {
           "optimizer": optimizer,
@@ -220,9 +220,29 @@ class JSSPModel(pl.LightningModule):
 
     t = torch.from_numpy(t).float().view(adj_matrix.shape[0]) 
 
+    # Node Feature 추가
+    B, V = assigned_machine.shape
+    device = adj_matrix.device
+
+    M = assigned_machine.max(dim=1).values + 1              # (B,)
+    cols = torch.arange(V, device=device).unsqueeze(0).expand(B, V)  # (B,V)
+
+    mach_id = (cols % M.unsqueeze(1))                       # (B,V)
+
+    J = (V // M).clamp_min(1)                               # (B,)
+    job_id = (cols // M.unsqueeze(1)).clamp_max(J.unsqueeze(1)-1)
+
+    denom_m = (M.unsqueeze(1) - 1).clamp_min(1).float()     # (B,1)
+    denom_j = (J.unsqueeze(1) - 1).clamp_min(1).float()     # (B,1)
+
+    mach_norm = (mach_id.float() / denom_m)                 # (B,V) in [0,1]
+    job_norm  = (job_id.float()  / denom_j)                 # (B,V) in [0,1]
+
+    node = torch.stack([job_norm, mach_norm], dim=-1)   # (B, V, 2)
+
     # Denoise
     x0_pred = self.forward(
-        points.float().to(adj_matrix.device),
+        node.to(adj_matrix.device),
         xt.float().to(adj_matrix.device),
         t.float().to(adj_matrix.device),
         edge_index,
@@ -231,7 +251,7 @@ class JSSPModel(pl.LightningModule):
     # Compute loss
     loss_func = nn.CrossEntropyLoss()
     loss = loss_func(x0_pred, JobAdj.long())
-    self.log("train/loss", loss)
+    self.log("train/loss", loss, on_epoch=True)
     return loss
     
   def invalid_noise_label(self, assigned_machine, JobAdj):
@@ -249,11 +269,11 @@ class JSSPModel(pl.LightningModule):
   def training_step(self, batch, batch_idx):
     return self.categorical_training_step(batch, batch_idx)
 
-  def categorical_denoise_step(self, points, xt, t, device, edge_index=None, target_t=None):
+  def categorical_denoise_step(self, points, node, xt, t, device, edge_index=None, target_t=None):
     with torch.no_grad():
       t = torch.from_numpy(t).view(1)
       x0_pred = self.forward(
-          points.float().to(device),
+          node.float().to(device),
           xt.float().to(device),
           t.float().to(device),
           edge_index.long().to(device) if edge_index is not None else None,
@@ -294,8 +314,28 @@ class JSSPModel(pl.LightningModule):
         t1 = np.array([t1]).astype(int)
         t2 = np.array([t2]).astype(int)
 
+        # Node Feature 추가
+        B, V = machine.shape
+        device = adj_matrix.device
+
+        M = machine.max(dim=1).values + 1              # (B,)
+        cols = torch.arange(V, device=device).unsqueeze(0).expand(B, V)  # (B,V)
+
+        mach_id = (cols % M.unsqueeze(1))                       # (B,V)
+
+        J = (V // M).clamp_min(1)                               # (B,)
+        job_id = (cols // M.unsqueeze(1)).clamp_max(J.unsqueeze(1)-1)
+
+        denom_m = (M.unsqueeze(1) - 1).clamp_min(1).float()     # (B,1)
+        denom_j = (J.unsqueeze(1) - 1).clamp_min(1).float()     # (B,1)
+
+        mach_norm = (mach_id.float() / denom_m)                 # (B,V) in [0,1]
+        job_norm  = (job_id.float()  / denom_j)                 # (B,V) in [0,1]
+
+        node = torch.stack([job_norm, mach_norm], dim=-1)   # (B, V, 2)
+
         xt = self.categorical_denoise_step(
-          pt, xt, t1, device, edge_index, target_t=t2)
+          pt, node, xt,  t1, device, edge_index, target_t=t2)
 
       adj_mat = xt.float().cpu().detach().numpy() + 1e-6
       if self.model_params['save_numpy_heatmap']:
