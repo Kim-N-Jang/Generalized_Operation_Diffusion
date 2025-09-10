@@ -192,7 +192,7 @@ class JSSPModel(pl.LightningModule):
     return val_dataloader
 
   def forward(self, x, adj, t, edge_index):
-    return self.model(x, t, adj, edge_index)
+    return self.model(x, adj, t, edge_index)
 
   def categorical_training_step(self, batch, batch_idx):
     edge_index = None
@@ -224,21 +224,24 @@ class JSSPModel(pl.LightningModule):
     B, V = assigned_machine.shape
     device = adj_matrix.device
 
-    M = assigned_machine.max(dim=1).values + 1              # (B,)
-    cols = torch.arange(V, device=device).unsqueeze(0).expand(B, V)  # (B,V)
+    # 각 배치의 머신 수(= 작업의 공정 수) M_b  (라벨 0..M-1 가정)
+    M = assigned_machine.max(dim=1).values + 1          # (B,)
 
-    mach_id = (cols % M.unsqueeze(1))                       # (B,V)
+    # 1) 작업 내 순번: JobAdj의 in-degree로 계산 (체인/전이폐쇄에서도 0..M-1이 됨)
+    #    JobAdj: (B,V,V)에서 dim=-2가 '들어오는 엣지' 축
+    op_idx = JobAdj.long().sum(dim=-2)                  # (B,V)  각 노드의 작업 내 순번(0..M-1)
+    op_idx = torch.minimum(op_idx, (M - 1).unsqueeze(1))# 혹시 모를 스파스 이상치 방어
 
-    J = (V // M).clamp_min(1)                               # (B,)
-    job_id = (cols // M.unsqueeze(1)).clamp_max(J.unsqueeze(1)-1)
+    # 2) 머신: 배치에서 준 assigned_machine을 그대로 사용 (0..M-1)
+    mach_idx = assigned_machine.long()                  # (B,V)
 
-    denom_m = (M.unsqueeze(1) - 1).clamp_min(1).float()     # (B,1)
-    denom_j = (J.unsqueeze(1) - 1).clamp_min(1).float()     # (B,1)
+    # 3) 스칼라 피처로 쓸 거면 [0,1] 정규화(간단/최소 변경)
+    denom = (M.unsqueeze(1) - 1).clamp(min=1).float()   # (B,1)
+    op_norm   = op_idx.float()  / denom                 # (B,V) in [0,1]
+    mach_norm = mach_idx.float() / denom                # (B,V) in [0,1]
 
-    mach_norm = (mach_id.float() / denom_m)                 # (B,V) in [0,1]
-    job_norm  = (job_id.float()  / denom_j)                 # (B,V) in [0,1]
-
-    node = torch.stack([job_norm, mach_norm], dim=-1)   # (B, V, 2)
+    # 최종 노드 피처: [작업내 순번, 배정 머신]
+    node = torch.stack([op_norm, mach_norm], dim=-1)    # (B, V, 2)
 
     # Denoise
     x0_pred = self.forward(
@@ -287,11 +290,11 @@ class JSSPModel(pl.LightningModule):
     np_edge_index = None
     device = batch[-1].device
 
-    real_batch_idx, pt, JobAdj, MachineAdj, machine, GA_makespan = batch
+    real_batch_idx, pt, JobAdj, MachineAdj, assigned_machine, GA_makespan = batch
     adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
     adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
     np_pt = pt.cpu().numpy()[0]
-    np_machine = machine.cpu().numpy()[0]
+    np_machine = assigned_machine.cpu().numpy()[0]
     GA_makespan = GA_makespan.float()
 
     num_m = len(set(np_machine.tolist()))
@@ -315,24 +318,27 @@ class JSSPModel(pl.LightningModule):
         t2 = np.array([t2]).astype(int)
 
         # Node Feature 추가
-        B, V = machine.shape
+        B, V = assigned_machine.shape
         device = adj_matrix.device
 
-        M = machine.max(dim=1).values + 1              # (B,)
-        cols = torch.arange(V, device=device).unsqueeze(0).expand(B, V)  # (B,V)
+        # 각 배치의 머신 수(= 작업의 공정 수) M_b  (라벨 0..M-1 가정)
+        M = assigned_machine.max(dim=1).values + 1          # (B,)
 
-        mach_id = (cols % M.unsqueeze(1))                       # (B,V)
+        # 1) 작업 내 순번: JobAdj의 in-degree로 계산 (체인/전이폐쇄에서도 0..M-1이 됨)
+        #    JobAdj: (B,V,V)에서 dim=-2가 '들어오는 엣지' 축
+        op_idx = JobAdj.long().sum(dim=-2)                  # (B,V)  각 노드의 작업 내 순번(0..M-1)
+        op_idx = torch.minimum(op_idx, (M - 1).unsqueeze(1))# 혹시 모를 스파스 이상치 방어
 
-        J = (V // M).clamp_min(1)                               # (B,)
-        job_id = (cols // M.unsqueeze(1)).clamp_max(J.unsqueeze(1)-1)
+        # 2) 머신: 배치에서 준 assigned_machine을 그대로 사용 (0..M-1)
+        mach_idx = assigned_machine.long()                  # (B,V)
 
-        denom_m = (M.unsqueeze(1) - 1).clamp_min(1).float()     # (B,1)
-        denom_j = (J.unsqueeze(1) - 1).clamp_min(1).float()     # (B,1)
+        # 3) 스칼라 피처로 쓸 거면 [0,1] 정규화(간단/최소 변경)
+        denom = (M.unsqueeze(1) - 1).clamp(min=1).float()   # (B,1)
+        op_norm   = op_idx.float()  / denom                 # (B,V) in [0,1]
+        mach_norm = mach_idx.float() / denom                # (B,V) in [0,1]
 
-        mach_norm = (mach_id.float() / denom_m)                 # (B,V) in [0,1]
-        job_norm  = (job_id.float()  / denom_j)                 # (B,V) in [0,1]
-
-        node = torch.stack([job_norm, mach_norm], dim=-1)   # (B, V, 2)
+        # 최종 노드 피처: [작업내 순번, 배정 머신]
+        node = torch.stack([op_norm, mach_norm], dim=-1)    # (B, V, 2)
 
         xt = self.categorical_denoise_step(
           pt, node, xt,  t1, device, edge_index, target_t=t2)

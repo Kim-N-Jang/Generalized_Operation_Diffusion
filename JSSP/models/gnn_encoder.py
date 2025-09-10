@@ -356,7 +356,7 @@ class GNNEncoder(nn.Module):
         e = self.out(e.permute((0, 3, 1, 2)))
         return e
 
-    def forward(self, x, timesteps, graph=None, edge_index=None):
+    def forward(self, x, graph, timesteps, edge_index=None):
         if self.node_feature_only:
             raise NotImplementedError
         else:
