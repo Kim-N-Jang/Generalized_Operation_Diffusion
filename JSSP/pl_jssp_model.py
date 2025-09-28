@@ -106,7 +106,7 @@ class JSSPModel(pl.LightningModule):
     else:
       optimizer = torch.optim.AdamW(
           self.model.parameters(), lr=self.optimizer_params['optimizer']['lr'], weight_decay=self.optimizer_params['optimizer']['weight_decay'])
-      scheduler = get_schedule_fn(self.aoptimizer_params['lr_scheduler'], self.get_total_num_training_steps())(optimizer)
+      scheduler = get_schedule_fn(self.optimizer_params['lr_scheduler'], self.get_total_num_training_steps())(optimizer)
 
       return {
           "optimizer": optimizer,
@@ -116,7 +116,7 @@ class JSSPModel(pl.LightningModule):
           },
       }
 
-  def categorical_posterior(self, target_t, t, x0_pred_prob, xt):
+  def categorical_posterior(self, target_t, t, x0_pred_prob, NoisedGraph):
     """Sample from the categorical posterior for a given time step.
        See https://arxiv.org/pdf/2107.03006.pdf for details.
     """
@@ -136,29 +136,29 @@ class JSSPModel(pl.LightningModule):
     Q_bar_t_source = torch.from_numpy(diffusion.Q_bar[t]).float().to(x0_pred_prob.device)
     Q_bar_t_target = torch.from_numpy(diffusion.Q_bar[target_t]).float().to(x0_pred_prob.device)
 
-    xt = F.one_hot(xt.long(), num_classes=2).float()
-    xt = xt.reshape(x0_pred_prob.shape)
+    NoisedGraph = F.one_hot(NoisedGraph.long(), num_classes=2).float()
+    NoisedGraph = NoisedGraph.reshape(x0_pred_prob.shape)
 
-    x_t_target_prob_part_1 = torch.matmul(xt, Q_t.permute((1, 0)).contiguous())
+    x_t_target_prob_part_1 = torch.matmul(NoisedGraph, Q_t.permute((1, 0)).contiguous())
     x_t_target_prob_part_2 = Q_bar_t_target[0]
-    x_t_target_prob_part_3 = (Q_bar_t_source[0] * xt).sum(dim=-1, keepdim=True)
+    x_t_target_prob_part_3 = (Q_bar_t_source[0] * NoisedGraph).sum(dim=-1, keepdim=True)
 
     x_t_target_prob = (x_t_target_prob_part_1 * x_t_target_prob_part_2) / x_t_target_prob_part_3
 
     sum_x_t_target_prob = x_t_target_prob[..., 1] * x0_pred_prob[..., 0]
     x_t_target_prob_part_2_new = Q_bar_t_target[1]
-    x_t_target_prob_part_3_new = (Q_bar_t_source[1] * xt).sum(dim=-1, keepdim=True)
+    x_t_target_prob_part_3_new = (Q_bar_t_source[1] * NoisedGraph).sum(dim=-1, keepdim=True)
 
     x_t_source_prob_new = (x_t_target_prob_part_1 * x_t_target_prob_part_2_new) / x_t_target_prob_part_3_new
 
     sum_x_t_target_prob += x_t_source_prob_new[..., 1] * x0_pred_prob[..., 1]
 
     if target_t > 0:
-      xt = torch.bernoulli(sum_x_t_target_prob.clamp(0, 1))
+      NoisedGraph = torch.bernoulli(sum_x_t_target_prob.clamp(0, 1))
     else:
-      xt = sum_x_t_target_prob.clamp(min=0)
+      NoisedGraph = sum_x_t_target_prob.clamp(min=0)
 
-    return xt
+    return NoisedGraph
 
   def duplicate_edge_index(self, edge_index, num_nodes, device):
     """Duplicate the edge index (in sparse graphs) for parallel sampling."""
@@ -191,39 +191,39 @@ class JSSPModel(pl.LightningModule):
     val_dataloader = GraphDataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     return val_dataloader
 
-  def forward(self, x, adj, t, edge_index):
-    return self.model(x, t, adj, edge_index)
+  def forward(self, Node, NoisedGraph, t, edge_index):
+    return self.model(Node, NoisedGraph, t, edge_index)
 
   def categorical_training_step(self, batch, batch_idx):
     edge_index = None
 
-    _, points, JobAdj, MachineAdj, assigned_machine, _ = batch
+    _, Pt, JobAdj, MachineAdj, Assigned_machine, _ = batch
     adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
     adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
 
-
-    t = np.random.randint(1, self.diffusion.T + 1, points.shape[0]).astype(int)
+    Node = Pt
+    t = np.random.randint(1, self.diffusion.T + 1, Node.shape[0]).astype(int)
    
     # Sample from diffusion
     adj_matrix_onehot = F.one_hot(adj_matrix.long(), num_classes=2).float()
 
-    valid_noise = self.invalid_noise_label(assigned_machine, JobAdj)
+    valid_noise = self.invalid_noise_label(Assigned_machine, JobAdj)
     
-    xt = self.diffusion.sample(adj_matrix_onehot, t)
+    NoisedGraph = self.diffusion.sample(adj_matrix_onehot, t)
 
     #노이즈 제어
-    xt = xt * valid_noise
-    xt[valid_noise == 1] = 0
+    NoisedGraph = NoisedGraph * valid_noise
+    NoisedGraph[valid_noise == 1] = 0
 
-    xt = xt * 2 - 1
-    xt = xt * (1.0 + 0.05 * torch.rand_like(xt))
+    NoisedGraph = NoisedGraph * 2 - 1
+    NoisedGraph = NoisedGraph * (1.0 + 0.05 * torch.rand_like(NoisedGraph))
 
     t = torch.from_numpy(t).float().view(adj_matrix.shape[0]) 
 
     # Denoise
     x0_pred = self.forward(
-        points.float().to(adj_matrix.device),
-        xt.float().to(adj_matrix.device),
+        Node.float().to(adj_matrix.device),
+        NoisedGraph.float().to(adj_matrix.device),
         t.float().to(adj_matrix.device),
         edge_index,
     )
@@ -231,15 +231,15 @@ class JSSPModel(pl.LightningModule):
     # Compute loss
     loss_func = nn.CrossEntropyLoss()
     loss = loss_func(x0_pred, JobAdj.long())
-    self.log("train/loss", loss)
+    self.log("train/loss", loss, on_epoch=True)
     return loss
     
-  def invalid_noise_label(self, assigned_machine, JobAdj):
-    batch_size, num_ops = assigned_machine.shape
-    device = assigned_machine.device  # cuda 번호 가져오기
+  def invalid_noise_label(self, Assigned_machine, JobAdj):
+    batch_size, num_ops = Assigned_machine.shape
+    device = Assigned_machine.device  # cuda 번호 가져오기
 
     # 머신 번호 비교 (같으면 1, 다르면 0)
-    valid_edge = (assigned_machine[:, :, None] == assigned_machine[:, None, :]).long().to(device)
+    valid_edge = (Assigned_machine[:, :, None] == Assigned_machine[:, None, :]).long().to(device)
     
     # 선행 작업비교 (선행 1, 비선행 0)
     valid_edge = valid_edge + JobAdj.long().to(device)
@@ -249,41 +249,43 @@ class JSSPModel(pl.LightningModule):
   def training_step(self, batch, batch_idx):
     return self.categorical_training_step(batch, batch_idx)
 
-  def categorical_denoise_step(self, points, xt, t, device, edge_index=None, target_t=None):
+  def categorical_denoise_step(self, Pt, NoisedGraph, t, device, edge_index=None, target_t=None):
     with torch.no_grad():
       t = torch.from_numpy(t).view(1)
       x0_pred = self.forward(
-          points.float().to(device),
-          xt.float().to(device),
+          Pt.float().to(device),
+          NoisedGraph.float().to(device),
           t.float().to(device),
           edge_index.long().to(device) if edge_index is not None else None,
       )
       x0_pred_prob = x0_pred.permute((0, 2, 3, 1)).contiguous().softmax(dim=-1)
-      xt = self.categorical_posterior(target_t, t, x0_pred_prob, xt)
-      return xt
+      NoisedGraph = self.categorical_posterior(target_t, t, x0_pred_prob, NoisedGraph)
+      return NoisedGraph
 
   def test_step(self, batch, batch_idx, split='test'):
     edge_index = None
     np_edge_index = None
     device = batch[-1].device
 
-    real_batch_idx, pt, JobAdj, MachineAdj, machine, GA_makespan = batch
+    real_batch_idx, Pt, JobAdj, MachineAdj, machine, GA_makespan = batch
     adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
     adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
-    np_pt = pt.cpu().numpy()[0]
+    np_pt = Pt.cpu().numpy()[0]
     np_machine = machine.cpu().numpy()[0]
     GA_makespan = GA_makespan.float()
+    
 
     num_m = len(set(np_machine.tolist()))
     num_j = len(np_pt) // num_m  
 
-    pt = pt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
+    Node = Pt
+    Node = Node.repeat(self.trainer_params['parallel_sampling'], 1, 1)
 
     for _ in range(self.trainer_params['sequential_sampling']):
-      xt = torch.randn_like(adj_matrix.float())
-      xt = xt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
-      xt = torch.randn_like(xt)
-      xt = (xt > 0).long()
+      NoisedGraph = torch.randn_like(adj_matrix.float())
+      NoisedGraph = NoisedGraph.repeat(self.trainer_params['parallel_sampling'], 1, 1)
+      NoisedGraph = torch.randn_like(NoisedGraph)
+      NoisedGraph = (NoisedGraph > 0).long()
 
       steps = self.trainer_params['inference_diffusion_steps']
       time_schedule = InferenceSchedule(inference_schedule=self.trainer_params['inference_schedule'],
@@ -294,15 +296,15 @@ class JSSPModel(pl.LightningModule):
         t1 = np.array([t1]).astype(int)
         t2 = np.array([t2]).astype(int)
 
-        xt = self.categorical_denoise_step(
-          pt, xt, t1, device, edge_index, target_t=t2)
+        NoisedGraph = self.categorical_denoise_step(
+          Node, NoisedGraph, t1, device, edge_index, target_t=t2)
 
-      adj_mat = xt.float().cpu().detach().numpy() + 1e-6
+      DenoisedGraph = NoisedGraph.float().cpu().detach().numpy() + 1e-6
       if self.model_params['save_numpy_heatmap']:
-        self.run_save_numpy_heatmap(adj_mat, np_pt, real_batch_idx, split)
+        self.run_save_numpy_heatmap(DenoisedGraph, np_pt, real_batch_idx, split)
 
     makespan, schedule = JSSPEvaluator(
-        adj_mat,
+        DenoisedGraph,
         np_pt,
         np_machine,
         num_j

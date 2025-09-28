@@ -2,7 +2,7 @@
 # import
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"  
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  
 from argparse import ArgumentParser
 
 import torch
@@ -20,17 +20,17 @@ from pl_jssp_model import JSSPModel
 # parameters
 
 data_params = {
-    'training_split': 'GeneratedData_Job3Machine5Seed42Size10.npy',
-    'training_split_label_dir': 'GeneratedData_Job3Machine5Seed42Size10.npy',
-    'validation_split': 'GeneratedData_Job3Machine5Seed42Size10.npy',
-    'test_split': 'GeneratedData_Job3Machine5Seed42Size10.npy',
-    'validation_examples': 10,
+    'training_split': 'GeneratedData_Job10Machine10Seed42Size100.npy',
+    'training_split_label_dir': 'GeneratedData_Job10Machine10Seed42Size100.npy',
+    'validation_split': 'GeneratedData_Job10Machine10Seed42Size100.npy',
+    'test_split': 'GeneratedData_Job10Machine10Seed42Size100.npy',
+    'validation_examples': 5,
     'num_workers': 16,
     'storage_path': './Data/TrainData'}
 
 wandb_params = {
     'project_name': 'jssp_diffusion',
-    'wandb_entity': '8chris8',
+    'wandb_entity': 'jang3427',
     'wandb_logger_name': 'difusco',
     'resume_weight_only': False,
     'storage_path': './results/',
@@ -44,7 +44,7 @@ model_params = {
     'sparse_factor': -1,
     'aggregation': 'sum',
     'two_opt_iterations': 1000,
-    'save_numpy_heatmap': True,
+    'save_numpy_heatmap': False,
     'use_activation_checkpoint': False,
 }
 
@@ -57,7 +57,7 @@ optimizer_params = {
 }
 
 trainer_params = {
-    'fp16': True,
+    'fp16': False,
     'diffusion_steps': 1000,
     'diffusion_schedule': 'linear',
     'inference_diffusion_steps': 1000,
@@ -65,8 +65,8 @@ trainer_params = {
     'inference_trick': 'ddim',
     'sequential_sampling': 1,
     'parallel_sampling': 1,
-    'epochs': 10,
-    'batch_size': 5,
+    'epochs': 100,
+    'batch_size': 10,
     'ckpt_path': None,
     'saving_mode': 'min'
 }
@@ -117,6 +117,7 @@ def main():
     callbacks=[TQDMProgressBar(refresh_rate=20), checkpoint_callback, lr_callback],
     logger=wandb_logger,
     check_val_every_n_epoch=1,
+    log_every_n_steps=1,    
     #strategy=DDPStrategy(static_graph=True),
     precision=16 if trainer_params['fp16'] else 32,
     )

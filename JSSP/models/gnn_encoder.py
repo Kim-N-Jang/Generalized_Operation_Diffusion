@@ -311,43 +311,43 @@ class GNNEncoder(nn.Module):
         ])
         self.use_activation_checkpoint = use_activation_checkpoint
 
-    def dense_forward(self, x, graph, timesteps, edge_index=None):
+    def dense_forward(self, Node, graph, timesteps, edge_index=None):
         """
     Args:
-        x: Input node coordinates (B x V x 2)
+        Node(x): Input node coordinates (B x V x 1)
         graph: Graph adjacency matrices (B x V x V)
         timesteps: Input node timesteps (B)
         edge_index: Edge indices (2 x E)
     Returns:
-        Updated edge features (B x V x V)
+        Edge : Updated edge features (B x V x V)
     """
         # Embed edge features
         # To do : Node embedding에 Positional Embedding 사용 여부 Abilation Study
         del edge_index
-        x = self.node_embed(x)
-        e = self.edge_embed(self.edge_pos_embed(graph))
+        Node = self.node_embed(Node)
+        Edge = self.edge_embed(self.edge_pos_embed(graph))
         time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
         graph = torch.ones_like(graph).long()
 
         for layer, time_layer, out_layer in zip(self.layers, self.time_embed_layers, self.per_layer_out):
-            x_in, e_in = x, e
+            Node_in, Edge_in = Node, Edge
 
             if self.use_activation_checkpoint:
                 raise NotImplementedError
 
-            x, e = layer(x, e, graph, mode="direct")
+            Node, Edge = layer(Node, Edge, graph, mode="direct")
             if not self.node_feature_only:
-                e = e + time_layer(time_emb)[:, None, None, :]
+                Edge = Edge + time_layer(time_emb)[:, None, None, :]
             else:
-                x = x + time_layer(time_emb)[:, None, :]
-            x = x_in + x
-            e = e_in + out_layer(e)
-        e = self.out(e.permute((0, 3, 1, 2)))
-        return e
+                Node = Node + time_layer(time_emb)[:, None, :]
+            Node = Node_in + Node
+            Edge = Edge_in + out_layer(Edge)
+        Edge = self.out(e.permute((0, 3, 1, 2)))
+        return Edge
 
-    def forward(self, x, timesteps, graph=None, edge_index=None):
+    def forward(self, Node, NoisedGraph, timesteps, edge_index=None):
         if self.node_feature_only:
             raise NotImplementedError
         else:
-            return self.dense_forward(x, graph, timesteps, edge_index)
+            return self.dense_forward(Node, NoisedGraph, timesteps, edge_index)
 
