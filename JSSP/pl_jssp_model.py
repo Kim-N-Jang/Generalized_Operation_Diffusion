@@ -11,6 +11,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.utilities import rank_zero_info
 from torch_geometric.data import DataLoader as GraphDataLoader
 from models.gnn_encoder import GNNEncoder
+from models.gnn_instance_embedding import GNNInstanceEncoder
 from utils.lr_schedulers import get_schedule_fn
 from utils.diffusion_schedulers import CategoricalDiffusion, InferenceSchedule
 from co_datasets.tsp_graph_dataset import TSPGraphDataset
@@ -46,6 +47,16 @@ class JSSPModel(pl.LightningModule):
         use_activation_checkpoint=self.model_params['use_activation_checkpoint'],
         node_feature_only=node_feature_only,
     )
+
+    self.premodel = GNNInstanceEncoder(
+        n_layers=self.model_params['n_layers'],
+        hidden_dim=self.model_params['hidden_dim'],
+        out_channels=out_channels,
+        aggregation=self.model_params['aggregation'],
+        use_activation_checkpoint=self.model_params['use_activation_checkpoint'],
+    )
+
+
     self.num_training_steps_cached = None
 
 
@@ -194,6 +205,14 @@ class JSSPModel(pl.LightningModule):
   def forward(self, Node, NoisedGraph, t, edge_index):
     return self.model(Node, NoisedGraph, t, edge_index)
 
+  def pre_forward(self, Node, JobAdj, MachineAdj, edge_index):
+    # JobAdj, MachineAdj 는 torch.Tensor (dtype=bool 또는 float) 라고 가정
+    CombinedAdj = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
+    B, V, _ = CombinedAdj.shape
+    idx = torch.arange(V, device=CombinedAdj.device)
+    CombinedAdj[:, idx, idx] = 1.0
+    return self.premodel(Node, CombinedAdj, edge_index)
+
   def categorical_training_step(self, batch, batch_idx):
     edge_index = None
 
@@ -201,19 +220,18 @@ class JSSPModel(pl.LightningModule):
     adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
     adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
 
-    Node = Pt
+    # Node = Pt
+    
+    Node = self.pre_forward(Pt, JobAdj, MachineAdj, edge_index)
+
     t = np.random.randint(1, self.diffusion.T + 1, Node.shape[0]).astype(int)
    
     # Sample from diffusion
     adj_matrix_onehot = F.one_hot(adj_matrix.long(), num_classes=2).float()
 
-    valid_noise = self.invalid_noise_label(Assigned_machine, JobAdj)
+    # valid_noise = self.invalid_noise_label(Assigned_machine, JobAdj)
     
     NoisedGraph = self.diffusion.sample(adj_matrix_onehot, t)
-
-    #노이즈 제어
-    NoisedGraph = NoisedGraph * valid_noise
-    NoisedGraph[valid_noise == 1] = 0
 
     NoisedGraph = NoisedGraph * 2 - 1
     NoisedGraph = NoisedGraph * (1.0 + 0.05 * torch.rand_like(NoisedGraph))
@@ -278,7 +296,10 @@ class JSSPModel(pl.LightningModule):
     num_m = len(set(np_machine.tolist()))
     num_j = len(np_pt) // num_m  
 
-    Node = Pt
+    # Node = Pt
+    # JobAdj, MachineAdj 는 torch.Tensor (dtype=bool 또는 float) 라고 가정
+    Node = self.pre_forward(Pt, JobAdj, MachineAdj, edge_index)
+
     Node = Node.repeat(self.trainer_params['parallel_sampling'], 1, 1)
 
     for _ in range(self.trainer_params['sequential_sampling']):

@@ -17,29 +17,15 @@ from torch_sparse import max as sparse_max
 import torch.utils.checkpoint as activation_checkpoint
 
 
-class GNNLayer(nn.Module):
-    """Configurable GNN Layer
-  Implements the Gated Graph ConvNet layer:
-      h_i = ReLU ( U*h_i + Aggr.( sigma_ij, V*h_j) ),
-      sigma_ij = sigmoid( A*h_i + B*h_j + C*e_ij ),
-      e_ij = ReLU ( A*h_i + B*h_j + C*e_ij ),
-      where Aggr. is an aggregation function: sum/mean/max.
-  References:
-      - X. Bresson and T. Laurent. An experimental study of neural networks for variable graphs. In International Conference on Learning Representations, 2018.
-      - V. P. Dwivedi, C. K. Joshi, T. Laurent, Y. Bengio, and X. Bresson. Benchmarking graph neural networks. arXiv preprint arXiv:2003.00982, 2020.
-  """
+class GNNEmbeddingLayer(nn.Module):
+    """
+    Difusco의 백본과 동일한 모델 
+    jssp의 인스턴스 정보를 노드에 함축시키기 위해 사용
+    """
 
     def __init__(self, hidden_dim, aggregation="sum", norm="batch", learn_norm=True, track_norm=False, gated=True):
-        """
-    Args:
-        hidden_dim: Hidden dimension size (int)
-        aggregation: Neighborhood aggregation scheme ("sum"/"mean"/"max")
-        norm: Feature normalization scheme ("layer"/"batch"/None)
-        learn_norm: Whether the normalizer has learnable affine parameters (True/False)
-        track_norm: Whether batch statistics are used to compute normalization mean/std (True/False)
-        gated: Whether to use edge gating (True/False)
-    """
-        super(GNNLayer, self).__init__()
+
+        super(GNNEmbeddingLayer, self).__init__()
         self.hidden_dim = hidden_dim
         self.aggregation = aggregation
         self.norm = norm
@@ -75,7 +61,6 @@ class GNNLayer(nn.Module):
     Returns:
         Updated node and edge features
     """
-
         h_in = h
         e_in = e
 
@@ -212,94 +197,45 @@ class ScalarEmbeddingSine(nn.Module):
         return pos_x
 
 
-class ScalarEmbeddingSine1D(nn.Module):
-    def __init__(self, num_pos_feats=64, temperature=10000, normalize=False, scale=None):
-        super().__init__()
-        self.num_pos_feats = num_pos_feats
-        self.temperature = temperature
-        self.normalize = normalize
-        if scale is not None and normalize is False:
-            raise ValueError("normalize should be True if scale is passed")
-        if scale is None:
-            scale = 2 * math.pi
-        self.scale = scale
-
-    def forward(self, x):
-        x_embed = x
-        dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
-        dim_t = self.temperature ** (2 * torch.div(dim_t, 2, rounding_mode='trunc') / self.num_pos_feats)
-
-        pos_x = x_embed[:, None] / dim_t
-        pos_x = torch.stack((pos_x[:, 0::2].sin(), pos_x[:, 1::2].cos()), dim=2).flatten(1)
-        return pos_x
-
-
-def run_sparse_layer(layer, time_layer, out_layer, adj_matrix, edge_index, add_time_on_edge=True):
-    def custom_forward(*inputs):
-        x_in = inputs[0]
-        e_in = inputs[1]
-        time_emb = inputs[2]
-        x, e = layer(x_in, e_in, adj_matrix, mode="direct", edge_index=edge_index, sparse=True)
-        if add_time_on_edge:
-            e = e + time_layer(time_emb)
-        else:
-            x = x + time_layer(time_emb)
-        x = x_in + x
-        e = e_in + out_layer(e)
-        return x, e
-
-    return custom_forward
-
-
-class GNNEncoder(nn.Module):
+class GNNInstanceEncoder(nn.Module):
     """Configurable GNN Encoder
   """
 
     def __init__(self, n_layers, hidden_dim, out_channels=1, aggregation="sum", norm="layer",
                  learn_norm=True, track_norm=False, gated=True,
-                 sparse=False, use_activation_checkpoint=False, node_feature_only=False,
+                 use_activation_checkpoint=False,
                  *args, **kwargs):
-        super(GNNEncoder, self).__init__()
-        self.sparse = sparse
-        self.node_feature_only = node_feature_only
+        super(GNNInstanceEncoder, self).__init__()
         self.hidden_dim = hidden_dim
-        time_embed_dim = hidden_dim // 2
-        self.node_embed = nn.Linear(hidden_dim, hidden_dim)
+        self.node_embed = nn.Linear(1, hidden_dim)
         self.edge_embed = nn.Linear(hidden_dim, hidden_dim)
 
-        if not node_feature_only:
-            self.pos_embed = PositionEmbeddingSine(hidden_dim // 2, normalize=True)
-            self.edge_pos_embed = ScalarEmbeddingSine(hidden_dim, normalize=False)
-        else:
-          self.pos_embed = ScalarEmbeddingSine1D(hidden_dim, normalize=False)
-        self.time_embed = nn.Sequential(
-            linear(hidden_dim, time_embed_dim),
+        # 왜 포시셔널 임베딩이 필요한가
+        self.pos_embed = PositionEmbeddingSine(hidden_dim // 2, normalize=True)
+        self.edge_pos_embed = ScalarEmbeddingSine(hidden_dim, normalize=False)
+
+        # node 임베딩을 한번 정제해서 출력해야 함 원래 edge에  쓰이나 임베딩에서는 노드에 적용
+        # self.out = nn.Sequential(
+        #     normalization(hidden_dim),
+        #     nn.ReLU(),
+        #     # zero_module(
+        #     nn.Conv2d(hidden_dim, out_channels, kernel_size=1, bias=True)
+        #     # ),
+        # )
+
+        self.out_node = nn.Sequential(
+            nn.LayerNorm(hidden_dim),  # ← 마지막 차원(H)에 대해 정규화
             nn.ReLU(),
-            linear(time_embed_dim, time_embed_dim),
-        )
-        self.out = nn.Sequential(
-            normalization(hidden_dim),
-            nn.ReLU(),
-            # zero_module(
-            nn.Conv2d(hidden_dim, out_channels, kernel_size=1, bias=True)
-            # ),
+            nn.Linear(hidden_dim, hidden_dim)  # 노드당 out_channels
         )
 
         self.layers = nn.ModuleList([
-            GNNLayer(hidden_dim, aggregation, norm, learn_norm, track_norm, gated)
+            GNNEmbeddingLayer(hidden_dim, aggregation, norm, learn_norm, track_norm, gated)
             for _ in range(n_layers)
         ])
 
-        self.time_embed_layers = nn.ModuleList([
-            nn.Sequential(
-                nn.ReLU(),
-                linear(
-                    time_embed_dim,
-                    hidden_dim,
-                ),
-            ) for _ in range(n_layers)
-        ])
 
+        # 얘가 왜 필요한가 왜 엣지에만 해주는가
         self.per_layer_out = nn.ModuleList([
             nn.Sequential(
                 nn.LayerNorm(hidden_dim, elementwise_affine=learn_norm),
@@ -309,45 +245,32 @@ class GNNEncoder(nn.Module):
                 ),
             ) for _ in range(n_layers)
         ])
+
         self.use_activation_checkpoint = use_activation_checkpoint
 
-    def dense_forward(self, Node, graph, timesteps, edge_index=None):
+    def forward(self, Node, graph, edge_index=None):
         """
-    Args:
-        Node(x): Input node coordinates (B x V x 1)
-        graph: Graph adjacency matrices (B x V x V)
-        timesteps: Input node timesteps (B)
-        edge_index: Edge indices (2 x E)
-    Returns:
-        Edge : Updated edge features (B x V x V)
+    jssp의 정보를 함축할 때 timestep은 필요치 않음
+    또한 엣지로 표현되는 인스턴스가 아니라면 이 임베딩을 쓸 필요가 없기에 노드 피쳐 온리도 필요 x
     """
         # Embed edge features
         # To do : Node embedding에 Positional Embedding 사용 여부 Abilation Study
         del edge_index
         Node = self.node_embed(Node)
         Edge = self.edge_embed(self.edge_pos_embed(graph))
-        time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
         graph = torch.ones_like(graph).long()
 
-        for layer, time_layer, out_layer in zip(self.layers, self.time_embed_layers, self.per_layer_out):
+        for layer, out_layer in zip(self.layers, self.per_layer_out):
             Node_in, Edge_in = Node, Edge
 
             if self.use_activation_checkpoint:
                 raise NotImplementedError
 
             Node, Edge = layer(Node, Edge, graph, mode="direct")
-            if not self.node_feature_only:
-                Edge = Edge + time_layer(time_emb)[:, None, None, :]
-            else:
-                Node = Node + time_layer(time_emb)[:, None, :]
-            Node = Node_in + Node
-            Edge = Edge_in + out_layer(Edge)
-        Edge = self.out(Edge.permute((0, 3, 1, 2)))
-        return Edge
-
-    def forward(self, Node, NoisedGraph, timesteps, edge_index=None):
-        if self.node_feature_only:
-            raise NotImplementedError
-        else:
-            return self.dense_forward(Node, NoisedGraph, timesteps, edge_index)
+            Node = Node_in + out_layer(Node)
+            # 왜 엣지는 한번 더 레이어를 거칠까?
+            Edge = Edge_in + Edge
+        # 노드에 인스턴스를 함축하므로 node를 줘야함
+        Node = self.out_node(Node)
+        return Node
 
