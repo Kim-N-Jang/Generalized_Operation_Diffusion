@@ -202,15 +202,35 @@ class JSSPModel(pl.LightningModule):
     val_dataloader = GraphDataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     return val_dataloader
 
-  def forward(self, Node, NoisedGraph, t, edge_index):
-    return self.model(Node, NoisedGraph, t, edge_index)
+  def forward(self, Node, NoisedGraph, MachineGraph, t, edge_index):
+    return self.model(Node, NoisedGraph, MachineGraph, t, edge_index)
 
-  def pre_forward(self, Node, JobAdj, MachineAdj, edge_index):
+  def pre_forward(self, Pt, JobAdj, MachineAdj, edge_index, Assigned_machine):
     # JobAdj, MachineAdj 는 torch.Tensor (dtype=bool 또는 float) 라고 가정
     CombinedAdj = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
     B, V, _ = CombinedAdj.shape
     idx = torch.arange(V, device=CombinedAdj.device)
     CombinedAdj[:, idx, idx] = 1.0
+
+    # 각 배치의 머신 수(= 작업의 공정 수) M_b  (라벨 0..M-1 가정)
+    M = Assigned_machine.max(dim=1).values + 1          # (B,)
+
+    # 1) 작업 내 순번: JobAdj의 in-degree로 계산 (체인/전이폐쇄에서도 0..M-1이 됨)
+    #    JobAdj: (B,V,V)에서 dim=-2가 '들어오는 엣지' 축
+    op_idx = JobAdj.long().sum(dim=-2)                  # (B,V)  각 노드의 작업 내 순번(0..M-1)
+    op_idx = torch.minimum(op_idx, (M - 1).unsqueeze(1))# 혹시 모를 스파스 이상치 방어
+
+    # 2) 머신: 배치에서 준 assigned_machine을 그대로 사용 (0..M-1)
+    mach_idx = Assigned_machine.long()                  # (B,V)
+
+    # 3) 스칼라 피처로 쓸 거면 [0,1] 정규화(간단/최소 변경)
+    denom = (M.unsqueeze(1) - 1).clamp(min=1).float()   # (B,1)
+    op_norm   = op_idx.float()  / denom                 # (B,V) in [0,1]
+    mach_norm = mach_idx.float() / denom                # (B,V) in [0,1]
+
+    # 최종 노드 피처: [작업내 순번, 배정 머신]
+    Node = torch.stack([op_norm, mach_norm], dim=-1)    # (B, V, 2)
+
     return self.premodel(Node, CombinedAdj, edge_index)
 
   def categorical_training_step(self, batch, batch_idx):
@@ -221,8 +241,7 @@ class JSSPModel(pl.LightningModule):
     adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
 
     # Node = Pt
-    
-    Node = self.pre_forward(Pt, JobAdj, MachineAdj, edge_index)
+    Node = self.pre_forward(Pt, JobAdj, MachineAdj, edge_index, Assigned_machine)
 
     t = np.random.randint(1, self.diffusion.T + 1, Node.shape[0]).astype(int)
    
@@ -232,23 +251,23 @@ class JSSPModel(pl.LightningModule):
     # valid_noise = self.invalid_noise_label(Assigned_machine, JobAdj)
     
     NoisedGraph = self.diffusion.sample(adj_matrix_onehot, t)
-
     NoisedGraph = NoisedGraph * 2 - 1
     NoisedGraph = NoisedGraph * (1.0 + 0.05 * torch.rand_like(NoisedGraph))
+    MachineGraph = (Assigned_machine.unsqueeze(2) == Assigned_machine.unsqueeze(1)).to(torch.int64)
 
     t = torch.from_numpy(t).float().view(adj_matrix.shape[0]) 
-
     # Denoise
     x0_pred = self.forward(
         Node.float().to(adj_matrix.device),
         NoisedGraph.float().to(adj_matrix.device),
+        MachineGraph.float().to(adj_matrix.device),
         t.float().to(adj_matrix.device),
         edge_index,
     )
 
     # Compute loss
     loss_func = nn.CrossEntropyLoss()
-    loss = loss_func(x0_pred, JobAdj.long())
+    loss = loss_func(x0_pred, MachineAdj.long())
     self.log("train/loss", loss, on_epoch=True)
     return loss
     
@@ -267,12 +286,13 @@ class JSSPModel(pl.LightningModule):
   def training_step(self, batch, batch_idx):
     return self.categorical_training_step(batch, batch_idx)
 
-  def categorical_denoise_step(self, Pt, NoisedGraph, t, device, edge_index=None, target_t=None):
+  def categorical_denoise_step(self, Pt, NoisedGraph, MachineGraph, t, device, edge_index=None, target_t=None):
     with torch.no_grad():
       t = torch.from_numpy(t).view(1)
       x0_pred = self.forward(
           Pt.float().to(device),
           NoisedGraph.float().to(device),
+          MachineGraph.float().to(device),          
           t.float().to(device),
           edge_index.long().to(device) if edge_index is not None else None,
       )
@@ -285,12 +305,13 @@ class JSSPModel(pl.LightningModule):
     np_edge_index = None
     device = batch[-1].device
 
-    real_batch_idx, Pt, JobAdj, MachineAdj, machine, GA_makespan = batch
+    real_batch_idx, Pt, JobAdj, MachineAdj, Assigned_machine, GA_makespan = batch
     adj_matrix = torch.logical_or(JobAdj.bool(), MachineAdj.bool()).float()
     adj_matrix.diagonal(dim1=-2, dim2=-1).fill_(1)
     np_pt = Pt.cpu().numpy()[0]
-    np_machine = machine.cpu().numpy()[0]
+    np_machine = Assigned_machine.cpu().numpy()[0]
     GA_makespan = GA_makespan.float()
+    MachineGraph = (Assigned_machine.unsqueeze(2) == Assigned_machine.unsqueeze(1)).to(torch.int64)
     
 
     num_m = len(set(np_machine.tolist()))
@@ -298,7 +319,7 @@ class JSSPModel(pl.LightningModule):
 
     # Node = Pt
     # JobAdj, MachineAdj 는 torch.Tensor (dtype=bool 또는 float) 라고 가정
-    Node = self.pre_forward(Pt, JobAdj, MachineAdj, edge_index)
+    Node = self.pre_forward(Pt, JobAdj, MachineAdj, edge_index, Assigned_machine)
 
     Node = Node.repeat(self.trainer_params['parallel_sampling'], 1, 1)
 
@@ -318,7 +339,7 @@ class JSSPModel(pl.LightningModule):
         t2 = np.array([t2]).astype(int)
 
         NoisedGraph = self.categorical_denoise_step(
-          Node, NoisedGraph, t1, device, edge_index, target_t=t2)
+          Node, NoisedGraph, MachineGraph, t1, device, edge_index, target_t=t2)
 
       DenoisedGraph = NoisedGraph.float().cpu().detach().numpy() + 1e-6
       if self.model_params['save_numpy_heatmap']:

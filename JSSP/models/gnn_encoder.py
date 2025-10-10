@@ -311,11 +311,12 @@ class GNNEncoder(nn.Module):
         ])
         self.use_activation_checkpoint = use_activation_checkpoint
 
-    def dense_forward(self, Node, graph, timesteps, edge_index=None):
+    def dense_forward(self, Node, NoisedGraph, MachineGraph, timesteps, edge_index=None):
         """
     Args:
         Node(x): Input node coordinates (B x V x 1)
-        graph: Graph adjacency matrices (B x V x V)
+        NoisedGraph: Noised graph adjacency matrices (B x V x V)
+        MachineGraph: Machine graph adjacency matrices (B x V x V)
         timesteps: Input node timesteps (B)
         edge_index: Edge indices (2 x E)
     Returns:
@@ -325,9 +326,12 @@ class GNNEncoder(nn.Module):
         # To do : Node embedding에 Positional Embedding 사용 여부 Abilation Study
         del edge_index
         Node = self.node_embed(Node)
-        Edge = self.edge_embed(self.edge_pos_embed(graph))
+        Edge = self.edge_embed(self.edge_pos_embed(NoisedGraph))
         time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
-        graph = torch.ones_like(graph).long()
+
+        ## Abilation Study : Aggregate전파 범위 설정 
+        # AggregateGraph = torch.ones_like(NoisedGraph).long() # FullyConnectedGraph
+        AggregateGraph = MachineGraph
 
         for layer, time_layer, out_layer in zip(self.layers, self.time_embed_layers, self.per_layer_out):
             Node_in, Edge_in = Node, Edge
@@ -335,7 +339,7 @@ class GNNEncoder(nn.Module):
             if self.use_activation_checkpoint:
                 raise NotImplementedError
 
-            Node, Edge = layer(Node, Edge, graph, mode="direct")
+            Node, Edge = layer(Node, Edge, AggregateGraph, mode="direct")
             if not self.node_feature_only:
                 Edge = Edge + time_layer(time_emb)[:, None, None, :]
             else:
@@ -345,9 +349,9 @@ class GNNEncoder(nn.Module):
         Edge = self.out(Edge.permute((0, 3, 1, 2)))
         return Edge
 
-    def forward(self, Node, NoisedGraph, timesteps, edge_index=None):
+    def forward(self, Node, NoisedGraph, MachineGraph, timesteps, edge_index=None):
         if self.node_feature_only:
             raise NotImplementedError
         else:
-            return self.dense_forward(Node, NoisedGraph, timesteps, edge_index)
+            return self.dense_forward(Node, NoisedGraph, MachineGraph, timesteps, edge_index)
 

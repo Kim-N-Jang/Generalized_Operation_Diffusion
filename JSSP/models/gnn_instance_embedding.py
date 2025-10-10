@@ -207,7 +207,14 @@ class GNNInstanceEncoder(nn.Module):
                  *args, **kwargs):
         super(GNNInstanceEncoder, self).__init__()
         self.hidden_dim = hidden_dim
-        self.node_embed = nn.Linear(1, hidden_dim)
+        # self.node_embed = nn.Linear(1, hidden_dim)
+
+        self.job_proj  = nn.Sequential(nn.Linear(1, hidden_dim), nn.ReLU(inplace=True))  
+        self.mach_proj = nn.Sequential(nn.Linear(1, hidden_dim), nn.ReLU(inplace=True))  
+        self.fuse_norm = nn.LayerNorm(hidden_dim, elementwise_affine=True)               
+        self.fuse_drop = nn.Dropout(p=0.1)                                               
+        self.node_embed = nn.Identity()
+
         self.edge_embed = nn.Linear(hidden_dim, hidden_dim)
 
         # 왜 포시셔널 임베딩이 필요한가
@@ -248,25 +255,31 @@ class GNNInstanceEncoder(nn.Module):
 
         self.use_activation_checkpoint = use_activation_checkpoint
 
-    def forward(self, Node, graph, edge_index=None):
+    def forward(self, Node, CombinedGraph, edge_index=None):
         """
     jssp의 정보를 함축할 때 timestep은 필요치 않음
     또한 엣지로 표현되는 인스턴스가 아니라면 이 임베딩을 쓸 필요가 없기에 노드 피쳐 온리도 필요 x
     """
-        # Embed edge features
-        # To do : Node embedding에 Positional Embedding 사용 여부 Abilation Study
-        del edge_index
-        Node = self.node_embed(Node)
-        Edge = self.edge_embed(self.edge_pos_embed(graph))
-        graph = torch.ones_like(graph).long()
 
+        del edge_index
+        # Node = self.node_embed(Node)
+        job_norm  = Node[..., 0:1].float()                       # (B,V,1)  
+        mach_norm = Node[..., 1:2].float()                       # (B,V,1)  
+        Node = self.job_proj(job_norm) + self.mach_proj(mach_norm)          
+        Node = self.fuse_drop(self.fuse_norm(Node))     
+        Edge = self.edge_embed(self.edge_pos_embed(CombinedGraph))
+
+        ## Abilation Study : Aggregate전파 범위 설정 
+        # AggregateGraph = torch.ones_like(CombinedGraph).long() # FullyConnectedGraph
+        AggregateGraph = CombinedGraph
+        
         for layer, out_layer in zip(self.layers, self.per_layer_out):
             Node_in, Edge_in = Node, Edge
 
             if self.use_activation_checkpoint:
                 raise NotImplementedError
 
-            Node, Edge = layer(Node, Edge, graph, mode="direct")
+            Node, Edge = layer(Node, Edge, AggregateGraph, mode="direct")
             Node = Node_in + out_layer(Node)
             # 왜 엣지는 한번 더 레이어를 거칠까?
             Edge = Edge_in + Edge
