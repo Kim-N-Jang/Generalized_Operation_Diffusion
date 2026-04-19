@@ -14,7 +14,7 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.strategies.ddp import DDPStrategy
 from pytorch_lightning.utilities import rank_zero_info
 
-from pl_jssp_model import JSSPModel
+from difformer_model import Difformer_Model
 
 ##########################################################################################
 # parameters
@@ -39,6 +39,10 @@ wandb_params = {
 
 
 model_params = {
+    'encoder_layer_num': 6,
+    'qkv_dim': 16,
+    'head_num': 16,
+    'ff_hidden_dim': 512,
     'n_layers': 12,
     'hidden_dim': 256,
     'sparse_factor': -1,
@@ -78,7 +82,7 @@ def main():
     epochs = trainer_params['epochs']
     project_name = wandb_params['project_name']
 
-    model_class = JSSPModel
+    model_class = Difformer_Model
     saving_mode = trainer_params['saving_mode']
         
     model = model_class(data_params=data_params,
