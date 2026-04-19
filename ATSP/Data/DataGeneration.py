@@ -1,17 +1,18 @@
 import numpy as np
-from UniformInstanceGen import UniformInstanceGen
+from ATSPGeneration import ATSPGeneration
 
-Job = 3
-Machine = 5
-Low = 1
-High = 99
+NumNodes = 10
 Size = 10
 Seed = 42
 
 def main():
     np.random.seed(Seed)
-    data = np.array([UniformInstanceGen(Nj=Job, Nm=Machine, low=Low, high= High) for _ in range(Size)], dtype=object)
-    np.save(f'TrainData/GeneratedData_Job{Job}Machine{Machine}Seed{Seed}Size{Size}.npy', data, allow_pickle=True)
+    Data = []
+    for _ in range(Size):
+        Data.append(ATSPGeneration(NumNodes))
+
+    SavePath = f'TrainData/ATSPData_NumNodes{NumNodes}Seed{Seed}Size{Size}.npy'
+    np.save(SavePath, np.array(Data, dtype=object), allow_pickle=True)
 
 if __name__ == "__main__":
     main()
