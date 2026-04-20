@@ -1,17 +1,17 @@
 import numpy as np
-from ATSPGeneration import ATSPGeneration
+import ATSP.Data.DataGeneration as DataGenerationModel
 
-NumNodes = 10
-Size = 10
-Seed = 42
+num_nodes = 10 #도시 수
+batch_size = 10 # 배치 수
+seed = 42
 
 def main():
-    np.random.seed(Seed)
+    np.random.seed(seed)
     Data = []
-    for _ in range(Size):
-        Data.append(ATSPGeneration(NumNodes))
+    for _ in range(batch_size):
+        Data.append(DataGenerationModel.ATSPGeneration(num_nodes))
 
-    SavePath = f'TrainData/ATSPData_NumNodes{NumNodes}Seed{Seed}Size{Size}.npy'
+    SavePath = f'TrainData/ATSPData_NumNodes{num_nodes}Seed{seed}Size{batch_size}.npy'
     np.save(SavePath, np.array(Data, dtype=object), allow_pickle=True)
 
 if __name__ == "__main__":

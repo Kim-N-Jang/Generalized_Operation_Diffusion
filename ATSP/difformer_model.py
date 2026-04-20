@@ -249,7 +249,6 @@ class Difformer_Model(pl.LightningModule):
                 t.float().to(device),
                 edge_index.long().to(device) if edge_index is not None else None,
             )
-
             if not self.sparse:
                 x0_pred_prob = x0_pred.permute((0, 2, 3, 1)).contiguous().softmax(dim=-1)
             else:
