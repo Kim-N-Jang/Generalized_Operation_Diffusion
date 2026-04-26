@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 
-def ATSPGeneration(node_cnt, lkh_path="Generalized_Operation_Diffusion/ATSP/Data/DataGeneration/LKH-3.0.14/LKH"):
+def ATSPGeneration(node_cnt, lkh_path="/home/inuai_11/Generalized_Operation_Diffusion/ATSP/Data/DataGeneration/LKH-3.0.14/LKH"):
     int_min = 1  # 0으로 두면 Floyd-Warshall 후 모든 값이 0이 될 위험이 있어 1 이상 권장
     int_max = 1000 * 1000
     scaler = 1000 * 1000
@@ -17,14 +17,12 @@ def ATSPGeneration(node_cnt, lkh_path="Generalized_Operation_Diffusion/ATSP/Data
     # 2. 자기 자신으로 가는 거리 0 초기화
     idx = np.arange(node_cnt)
     prob[idx, idx] = 0
-
-    # 3. Floyd-Warshall (삼각 부등식 만족을 위해)
-    while True:
-        old_prob = prob.copy()
-        prob = np.min(prob[:, np.newaxis, :] + prob[np.newaxis, :, :], axis=2)
-        if np.array_equal(prob, old_prob):
-            break
-
+    # 3. Floyd-Warshall (삼각 부등식 만족을 위해) 수정!
+    for k in range(node_cnt):                                                                           
+        for i in range(node_cnt):
+            for j in range(node_cnt):                                                                   
+                prob[i, j] = min(prob[i, j], prob[i, k] + prob[k, j])
+                                                                          
     # 4. 스케일링 전 정수 행렬 (LKH 입력용)
     # Floyd-Warshall 결과가 실수일 수 있으므로 다시 정수화
     mat_int = np.rint(prob).astype(np.int64)
@@ -67,7 +65,7 @@ def ATSPGeneration(node_cnt, lkh_path="Generalized_Operation_Diffusion/ATSP/Data
     EdgeFeature = prob / scaler
     # Objective는 스케일링된 거리 행렬 기준 경로 합
     Objective = _cycle_cost(EdgeFeature, tour0)
-
+    print(node_cnt,EdgeFeature,SolutionAdj,Objective)
     return node_cnt, None, EdgeFeature, SolutionAdj, Objective
 
 

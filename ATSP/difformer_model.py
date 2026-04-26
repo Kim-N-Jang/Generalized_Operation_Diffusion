@@ -14,7 +14,7 @@ from models.gnn_encoder import GNNEncoder
 from models.transformer_encoder import TransformerEncoder
 from utils.lr_schedulers import get_schedule_fn
 from utils.diffusion_schedulers import CategoricalDiffusion, InferenceSchedule
-from co_datasets.tsp_graph_dataset import TSPGraphDataset
+from co_datasets.atsp_graph_dataset import ATSPGraphDataset
 from utils.JSSP_utils import JSSPEvaluator
 
 
@@ -53,15 +53,15 @@ class Difformer_Model(pl.LightningModule):
 
         self.num_training_steps_cached = None
 
-        self.train_dataset = TSPGraphDataset(
+        self.train_dataset = ATSPGraphDataset(
             data_file=os.path.join(self.data_params['storage_path'], self.data_params['training_split']),
             sparse_factor=self.model_params['sparse_factor'],
         )
-        self.test_dataset = TSPGraphDataset(
+        self.test_dataset = ATSPGraphDataset(
             data_file=os.path.join(self.data_params['storage_path'], self.data_params['test_split']),
             sparse_factor=self.model_params['sparse_factor'],
         )
-        self.validation_dataset = TSPGraphDataset(
+        self.validation_dataset = ATSPGraphDataset(
             data_file=os.path.join(self.data_params['storage_path'], self.data_params['validation_split']),
             sparse_factor=self.model_params['sparse_factor'],
         )

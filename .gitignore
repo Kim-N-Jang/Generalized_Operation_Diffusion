@@ -1,3 +1,5 @@
 JSSP/Data/TrainData/
 JSSP/results/
 **/__pycache__/
+ATSP/Data/TrainData/*
+.venv/
