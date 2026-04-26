@@ -1,5 +1,5 @@
 import numpy as np
-import ATSP.Data.DataGeneration as DataGenerationModel
+import DataGeneration as DataGenerationModel
 
 num_nodes = 10 #도시 수
 batch_size = 10 # 배치 수

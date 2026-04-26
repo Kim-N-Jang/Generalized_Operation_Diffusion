@@ -1,12 +1,12 @@
 import numpy as np
-import torch
+# import torch
 import subprocess
 import tempfile
 import shutil
 from pathlib import Path
 
 
-def ATSPGeneration(node_cnt, lkh_path="LKH"):
+def ATSPGeneration(node_cnt, lkh_path="Generalized_Operation_Diffusion/ATSP/Data/DataGeneration/LKH-3.0.14/LKH"):
     int_min = 1  # 0으로 두면 Floyd-Warshall 후 모든 값이 0이 될 위험이 있어 1 이상 권장
     int_max = 1000 * 1000
     scaler = 1000 * 1000
