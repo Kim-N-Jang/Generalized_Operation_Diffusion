@@ -60,19 +60,19 @@ def ATSPGeneration(node_cnt, lkh_path="/home/inuai_11/Generalized_Operation_Diff
         tour_raw = _parse_tour_file(tour_file)
         tour0 = _normalize_tour_to_permutation(tour_raw, node_cnt)
 
-    # 6. SolutionAdj (Adjacency Matrix) 구성
-    SolutionAdj = np.zeros((node_cnt, node_cnt), dtype=np.float32)
+    # 6. solution_adj (Adjacency Matrix) 구성
+    solution_adj = np.zeros((node_cnt, node_cnt), dtype=np.float32)
     for i in range(node_cnt):
         u = tour0[i]
         v = tour0[(i + 1) % node_cnt]
-        SolutionAdj[u, v] = 1.0
+        solution_adj[u, v] = 1.0
 
-    # Objective는 스케일링된 거리 행렬 기준 경로 합
+    # objective는 스케일링된 거리 행렬 기준 경로 합
 
-    EdgeFeature = problem / scaler
-    Objective = _cycle_cost(EdgeFeature, tour0)
+    edge_feature = problem / scaler
+    objective = _cycle_cost(edge_feature, tour0)
 
-    return node_cnt, None, EdgeFeature, SolutionAdj, Objective
+    return node_cnt, None, edge_feature, solution_adj, objective
 
 
 # --- 내부 보조 함수들 (기존 코드 활용) ---

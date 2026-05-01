@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from Attention_LIB import MixedScore_MultiHeadAttention
+from .Attention_LIB import MixedScore_MultiHeadAttention
 
 class TransformerEncoder(nn.Module):
     def __init__(self, **model_params):
@@ -34,14 +34,15 @@ class TransformerEncoder(nn.Module):
     def forward(self, node_input, edge_input):
         # node_input: (batch, cnt, info)
         # edge_input: (batch, cnt, cnt)
-
+        print(edge_input.shape)
         if node_input is None:
             batch_size, num_nodes, _ = edge_input.shape
-        elif edge_input is None:
+        # elif edge_input is None:
+        else:
             batch_size, num_nodes, _ = node_input.shape
-
+        
         # 일단 노드 정보 없음만 가정
-        out = self.node_idx_projection(torch.rand((batch_size, num_nodes, 1)))
+        out = self.node_idx_projection(torch.rand((batch_size, num_nodes, 1),device=edge_input.device))
 
         scaled_data = self.compute_normalized_matrices(edge_input)
 

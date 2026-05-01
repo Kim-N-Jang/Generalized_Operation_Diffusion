@@ -3,3 +3,5 @@ JSSP/results/
 **/__pycache__/
 ATSP/Data/TrainData/*
 .venv/
+ATSP/Data/DataGeneration/LKH-3.0.14/
+ATSP/results/

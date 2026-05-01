@@ -198,8 +198,9 @@ class Difformer_Model(pl.LightningModule):
         val_dataloader = GraphDataLoader(val_dataset, batch_size=batch_size, shuffle=False)
         return val_dataloader
 
-    def forward(self, Node, NoisedGraph, MachineGraph, t, edge_index):
-        return self.model(Node, NoisedGraph, MachineGraph, t, edge_index)
+
+    def forward(self, points, xt, solution_adj, t, device, edge_index=None):                            
+        return self.model(points, xt, solution_adj, t, edge_index) 
 
     def pre_forward(self, node_input, edge_input):
         return self.premodel(node_input, edge_input)
@@ -207,45 +208,47 @@ class Difformer_Model(pl.LightningModule):
     def categorical_training_step(self, batch, batch_idx):
         edge_index = None
 
-        _, node, adj_matrix, dist_matrix, _, _ = batch
-        t = np.random.randint(1, self.diffusion.T + 1, node.shape[0]).astype(int)
-        adj_matrix_onehot = F.one_hot(adj_matrix.long(), num_classes=2).float()
+        node_cnt, node_feature, edge_feature, solution_adj, objective = batch
+        t = np.random.randint(1, self.diffusion.T + 1, node_cnt.shape[0]).astype(int)
+        solution_adj_onehot = F.one_hot(solution_adj.long(), num_classes=2).float()
 
         # 인코더 입력 및 엣지, 노드 정보 저장
-        points = self.premodel(node, dist_matrix)
+        points = self.premodel(node_feature, edge_feature)
 
-        xt = self.diffusion.sample(adj_matrix_onehot, t)
+        xt = self.diffusion.sample(solution_adj_onehot, t)
         xt = xt * 2 - 1
         xt = xt * (1.0 + 0.05 * torch.rand_like(xt))
 
-        t = torch.from_numpy(t).float().view(adj_matrix.shape[0])
+        t = torch.from_numpy(t).float().view(solution_adj.shape[0])
 
         # Denoise
         # xt:노이즈
         # t: 시간 스텝
-        # adj_matrix: 정답
+        # solution_adj: 정답
         x0_pred = self.forward(
-            points.float().to(adj_matrix.device),
-            xt.float().to(adj_matrix.device),
-            t.float().to(adj_matrix.device),
+            points.float().to(solution_adj.device),
+            xt.float().to(solution_adj.device),
+            solution_adj.float().to(solution_adj.device),
+            t.float().to(solution_adj.device),
             edge_index,
         )
 
         # Compute loss
         loss_func = nn.CrossEntropyLoss()
-        loss = loss_func(x0_pred, adj_matrix.long())
+        loss = loss_func(x0_pred, solution_adj.long())
         self.log("train/loss", loss)
         return loss
 
     def training_step(self, batch, batch_idx):
         return self.categorical_training_step(batch, batch_idx)
 
-    def categorical_denoise_step(self, points, xt, t, device, edge_index=None, target_t=None):
+    def categorical_denoise_step(self, points, xt, solution_adj, t, device, edge_index=None, target_t=None):  
         with torch.no_grad():
             t = torch.from_numpy(t).view(1)
             x0_pred = self.forward(
                 points.float().to(device),
                 xt.float().to(device),
+                solution_adj.float().to(device),
                 t.float().to(device),
                 edge_index.long().to(device) if edge_index is not None else None,
             )
@@ -262,28 +265,28 @@ class Difformer_Model(pl.LightningModule):
         np_edge_index = None
         device = batch[-1].device
 
-        #real_batch_idx: 번호?
-        #node: node info
-        #adj_matrix: 솔루션(매트릭스)
-        #dist_matrix: edge info
-        #gt_tour: 정답 순열
+        #node: node info (node_cnt)
+        #node_feature: node feature (currently None)
+        #edge_feature: edge info
+        #solution_adj: solution adjacency matrix - used as ground truth
+        #objective: tour length
 
-        real_batch_idx, node, adj_matrix, dist_matrix, gt_tour, tour_len = batch
-        points = self.premodel(node, dist_matrix)
+        node_cnt, node_feature, edge_feature, solution_adj, objective = batch
+        points = self.premodel(node_feature, edge_feature)
         np_points = points.cpu().numpy()[0]
-        np_gt_tour = gt_tour.cpu().numpy()[0]
+        np_gt_tour = solution_adj.cpu().numpy()[0]
 
-        if self.args.parallel_sampling > 1:
-            points = points.repeat(self.args.parallel_sampling, 1, 1)
+        if self.trainer_params['parallel_sampling'] > 1:
+            points = points.repeat(self.trainer_params['parallel_sampling'], 1, 1)
 
-        for _ in range(self.args.sequential_sampling):
-            xt = torch.randn_like(adj_matrix.float())
+        for _ in range(self.trainer_params['sequential_sampling']):
+            xt = torch.randn_like(solution_adj.float())
             xt = xt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
             xt = torch.randn_like(xt)
             xt = (xt > 0).long()
 
-            steps = self.args.inference_diffusion_steps
-            time_schedule = InferenceSchedule(inference_schedule=self.args.inference_schedule,
+            steps = self.trainer_params['inference_diffusion_steps']
+            time_schedule = InferenceSchedule(inference_schedule=self.trainer_params['inference_schedule'],
                                               T=self.diffusion.T, inference_T=steps)
 
             # Diffusion iterations
@@ -292,27 +295,25 @@ class Difformer_Model(pl.LightningModule):
                 t1 = np.array([t1]).astype(int)
                 t2 = np.array([t2]).astype(int)
 
-                xt = self.categorical_denoise_step(
-                    points, xt, t1, device, edge_index, target_t=t2)
-
+                xt = self.categorical_denoise_step(points, xt, solution_adj, t1, device, edge_index, target_t=t2)                                  
 
             adj_mat = xt.float().cpu().detach().numpy() + 1e-6
-            if self.args.save_numpy_heatmap:
-                self.run_save_numpy_heatmap(adj_mat, np_points, real_batch_idx, split)
+            if self.model_params['save_numpy_heatmap']:
+                self.run_save_numpy_heatmap(adj_mat, np_points, batch_idx, split)
 
         get_tour_len, get_tour = ATSPEvaluator(
             adj_mat,
-            node,
-            dist_matrix,
+            node_cnt,
+            edge_feature,
         )
 
         metrics = {
-            f"{split}/Heuristic": tour_len,
+            f"{split}/Heuristic": objective,
             f"{split}/Diffusion": get_tour_len,
         }
         for k, v in metrics.items():
             self.log(k, v, on_epoch=True, sync_dist=True)
-        Opt_Gap = math.max(0,((get_tour_len - tour_len) / tour_len * 100))
+        Opt_Gap = math.max(0,((get_tour_len - objective) / objective * 100))
         self.log(f"{split}/RPD", Opt_Gap, prog_bar=True, on_epoch=True, sync_dist=True)
         # Terminal Log
         # print("RPD",RPD)

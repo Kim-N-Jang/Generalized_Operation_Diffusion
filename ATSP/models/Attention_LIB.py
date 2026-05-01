@@ -8,10 +8,10 @@ class MixedScore_MultiHeadAttention(nn.Module):
 
         head_num = model_params['head_num']
         qkv_dim = model_params['qkv_dim']
-        embedding_dim = model_params['embedding_dim']
+        hidden_dim = model_params['hidden_dim']
 
-        self.Wz1 = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
-        self.Wz2 = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
+        self.Wz1 = nn.Linear(hidden_dim, head_num * qkv_dim, bias=False)
+        self.Wz2 = nn.Linear(hidden_dim, head_num * qkv_dim, bias=False)
         
     def reshape_by_heads(self, edge, head_num):
 
