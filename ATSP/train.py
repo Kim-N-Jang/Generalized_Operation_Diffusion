@@ -20,18 +20,18 @@ from difformer_model import Difformer_Model
 # parameters
 
 data_params = {
-    'training_split': 'GeneratedData_Job10Machine10Seed42Size100.npy',
-    'training_split_label_dir': 'GeneratedData_Job10Machine10Seed42Size100.npy',
-    'validation_split': 'GeneratedData_Job10Machine10Seed42Size100.npy',
-    'test_split': 'GeneratedData_Job10Machine10Seed42Size100.npy',
+    'training_split': 'ATSPData_NumNodes50Seed42Size10.npy',
+    'training_split_label_dir': 'ATSPData_NumNodes50Seed42Size10.npy',
+    'validation_split': 'ATSPData_NumNodes50Seed42Size10.npy',
+    'test_split': 'ATSPData_NumNodes50Seed42Size10.npy',
     'validation_examples': 5,
     'num_workers': 16,
     'storage_path': './Data/TrainData'}
 
 wandb_params = {
-    'project_name': 'jssp_diffusion',
+    'project_name': 'atsp_diffusion',
     'wandb_entity': 'jang3427',
-    'wandb_logger_name': 'difusco',
+    'wandb_logger_name': 'atsp',
     'resume_weight_only': False,
     'storage_path': './results/',
     'resume_id': None

@@ -1,12 +1,12 @@
 import numpy as np
 import DataGeneration as DataGenerationModel
 
-num_nodes = 10 #도시 수
+num_nodes = 50 #도시 수
 batch_size = 10 # 배치 수
 seed = 42
 
 def main():
-    np.random.seed(seed)
+    np.random.seed()
     Data = []
     for _ in range(batch_size):
         Data.append(DataGenerationModel.ATSPGeneration(num_nodes))

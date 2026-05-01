@@ -7,25 +7,31 @@ from pathlib import Path
 
 
 def ATSPGeneration(node_cnt, lkh_path="/home/inuai_11/Generalized_Operation_Diffusion/ATSP/Data/DataGeneration/LKH-3.0.14/LKH"):
-    int_min = 1  # 0으로 두면 Floyd-Warshall 후 모든 값이 0이 될 위험이 있어 1 이상 권장
+    int_min = 0
     int_max = 1000 * 1000
     scaler = 1000 * 1000
 
-    # 1. 무작위 정수 거리 행렬 생성
-    prob = np.random.randint(low=int_min, high=int_max, size=(node_cnt, node_cnt)).astype(np.float64)
+    # 1. 2차원 배열 생성 (node, node)
+    problem = np.random.randint(low=int_min, high=int_max, size=(node_cnt, node_cnt)).astype(np.float64)
+    
+    # 2. 대각 성분 0
+    np.fill_diagonal(problem, 0)
 
-    # 2. 자기 자신으로 가는 거리 0 초기화
-    idx = np.arange(node_cnt)
-    prob[idx, idx] = 0
-    # 3. Floyd-Warshall (삼각 부등식 만족을 위해) 수정!
-    for k in range(node_cnt):                                                                           
-        for i in range(node_cnt):
-            for j in range(node_cnt):                                                                   
-                prob[i, j] = min(prob[i, j], prob[i, k] + prob[k, j])
-                                                                          
-    # 4. 스케일링 전 정수 행렬 (LKH 입력용)
-    # Floyd-Warshall 결과가 실수일 수 있으므로 다시 정수화
-    mat_int = np.rint(prob).astype(np.int64)
+    while True:
+        old_problem = problem.copy()
+
+        # 원본 로직 투영:
+        # torch의 problem[:, None, :] -> problem[:, np.newaxis, :] (N, 1, N)
+        # torch의 problem[None, :, :].transpose(1, 2) -> np.transpose(problem[None, :, :], (0, 2, 1)) (1, N, N)
+        
+        term1 = problem[:, np.newaxis, :]  # (N, 1, N)
+        term2 = np.transpose(problem[None, :, :], (0, 2, 1))  # (1, N, N)
+        
+        # np.min(..., axis=2)는 torch의 .min(dim=2)와 동일합니다.
+        problem = np.min(term1 + term2, axis=2)
+
+        if np.array_equal(problem, old_problem):
+            break
 
     # 5. LKH3 실행하여 최적해 구하기
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -35,7 +41,7 @@ def ATSPGeneration(node_cnt, lkh_path="/home/inuai_11/Generalized_Operation_Diff
         par_file = tmp_path / "params.par"
 
         # TSPLIB 파일 쓰기
-        _write_tsplib_atsp_full_matrix(mat_int, prob_file, name="temp")
+        _write_tsplib_atsp_full_matrix(problem, prob_file, name="temp")
 
         # PAR 파일 쓰기
         lines = [
@@ -61,11 +67,11 @@ def ATSPGeneration(node_cnt, lkh_path="/home/inuai_11/Generalized_Operation_Diff
         v = tour0[(i + 1) % node_cnt]
         SolutionAdj[u, v] = 1.0
 
-    # 7. 스케일링 및 Objective 계산
-    EdgeFeature = prob / scaler
     # Objective는 스케일링된 거리 행렬 기준 경로 합
+
+    EdgeFeature = problem / scaler
     Objective = _cycle_cost(EdgeFeature, tour0)
-    print(node_cnt,EdgeFeature,SolutionAdj,Objective)
+
     return node_cnt, None, EdgeFeature, SolutionAdj, Objective
 
 
