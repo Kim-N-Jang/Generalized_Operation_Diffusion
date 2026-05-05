@@ -15,7 +15,7 @@ from models.transformer_encoder import TransformerEncoder
 from utils.lr_schedulers import get_schedule_fn
 from utils.diffusion_schedulers import CategoricalDiffusion, InferenceSchedule
 from co_datasets.atsp_graph_dataset import ATSPGraphDataset
-from utils.JSSP_utils import JSSPEvaluator
+from utils.ATSP_utils import ATSPEvaluator
 
 
 class Difformer_Model(pl.LightningModule):
@@ -262,58 +262,79 @@ class Difformer_Model(pl.LightningModule):
 
     def test_step(self, batch, batch_idx, split='test'):
         edge_index = None
-        np_edge_index = None
         device = batch[-1].device
 
-        #node: node info (node_cnt)
-        #node_feature: node feature (currently None)
-        #edge_feature: edge info
-        #solution_adj: solution adjacency matrix - used as ground truth
-        #objective: tour length
-
         node_cnt, node_feature, edge_feature, solution_adj, objective = batch
+
         points = self.premodel(node_feature, edge_feature)
-        np_points = points.cpu().numpy()[0]
-        np_gt_tour = solution_adj.cpu().numpy()[0]
 
         if self.trainer_params['parallel_sampling'] > 1:
             points = points.repeat(self.trainer_params['parallel_sampling'], 1, 1)
 
+        best_tour_len = float('inf')
+        best_adj_mat  = None
+
         for _ in range(self.trainer_params['sequential_sampling']):
-            xt = torch.randn_like(solution_adj.float())
-            xt = xt.repeat(self.trainer_params['parallel_sampling'], 1, 1)
-            xt = torch.randn_like(xt)
-            xt = (xt > 0).long()
+            # 매 sequential 시도마다 새로운 랜덤 노이즈에서 출발
+            xt = (torch.randn(
+                self.trainer_params['parallel_sampling'],
+                node_cnt.item(),
+                node_cnt.item(),
+                device=device
+            ) > 0).long()
 
             steps = self.trainer_params['inference_diffusion_steps']
-            time_schedule = InferenceSchedule(inference_schedule=self.trainer_params['inference_schedule'],
-                                              T=self.diffusion.T, inference_T=steps)
+            time_schedule = InferenceSchedule(
+                inference_schedule=self.trainer_params['inference_schedule'],
+                T=self.diffusion.T,
+                inference_T=steps,
+            )
 
-            # Diffusion iterations
             for i in range(steps):
                 t1, t2 = time_schedule(i)
-                t1 = np.array([t1]).astype(int)
-                t2 = np.array([t2]).astype(int)
+                t1 = np.array([t1]).astype(int)                                                       
+                t2 = np.array([t2]).astype(int)   
+                xt = self.categorical_denoise_step(
+                    points, xt, solution_adj, t1, device, edge_index, target_t=t2
+                )
 
-                xt = self.categorical_denoise_step(points, xt, solution_adj, t1, device, edge_index, target_t=t2)                                  
+            adj_mat = xt.float().cpu().detach() + 1e-6
+            adj_mat = adj_mat[:,None,:,:] # temp
+            # 이번 sequential 시도의 결과 평가
+            tour_len, _ = ATSPEvaluator(adj_mat, edge_feature)
 
-            adj_mat = xt.float().cpu().detach().numpy() + 1e-6
+            # 지금까지 중 가장 좋은 결과 추적
+            if tour_len < best_tour_len:
+                best_tour_len = tour_len
+                best_adj_mat  = adj_mat
+
             if self.model_params['save_numpy_heatmap']:
-                self.run_save_numpy_heatmap(adj_mat, np_points, batch_idx, split)
+                self.run_save_numpy_heatmap(adj_mat.numpy(), points.cpu().numpy()[0], batch_idx, split)
 
-        get_tour_len, get_tour = ATSPEvaluator(
-            adj_mat,
-            node_cnt,
-            edge_feature,
-        )
+
+        # print(adj_mat.shape)
+        # print(node_cnt)
+        # print(edge_feature.shape())
+
+        #1. adj_mat이 바이너리 값이 아님 어떻게 측정하는가?
+        #2. adj_mat는 sequential_sampling 내부에서 선언해놓고 왜 측정은 밖에서 하는가?
+        #3. adj_mat가 RPD를 구하는 매개변수인데 배치의 평균으로 계산되어야 하는거 아닌가?
+        #4. 이 구조라면 test, valid가 제대로 안만들어지면 학습도 제대로 안되는거 아닌가?
+
+        # get_tour_len, _ = ATSPEvaluator(
+        #     adj_mat,
+        #     edge_feature,
+        # )
 
         metrics = {
             f"{split}/Heuristic": objective,
-            f"{split}/Diffusion": get_tour_len,
+            f"{split}/Diffusion": tour_len,
         }
         for k, v in metrics.items():
             self.log(k, v, on_epoch=True, sync_dist=True)
-        Opt_Gap = math.max(0,((get_tour_len - objective) / objective * 100))
+        # Batch, parallel 중에 opt 설정필요
+        # Opt_Gap = math.max(0,((tour_len - objective) / objective * 100)) 
+        Opt_Gap = 0
         self.log(f"{split}/RPD", Opt_Gap, prog_bar=True, on_epoch=True, sync_dist=True)
         # Terminal Log
         # print("RPD",RPD)

@@ -7,6 +7,93 @@ import scipy.sparse
 import scipy.spatial
 import torch
 
+import torch
+
+def ATSPEvaluator(adj_mtrx, edge_feature):
+    """
+    adj_mtrx: [B, S, N, N]  (A_ij: i -> j 확률)
+    edge_feature: [B, N, N] (c_ij: cost)
+
+    return: [B, S]
+    """
+    B, S, N, _ = adj_mtrx.shape
+    device = adj_mtrx.device
+
+    # 거리 broadcast
+    dist = edge_feature.unsqueeze(1).expand(B, S, N, N)
+
+    # priority 정의 (log-space 추천)
+    priority = torch.log(adj_mtrx + 1e-8)
+
+    # flatten
+    flat_priority = priority.reshape(B * S, -1)
+    flat_dist = dist.reshape(B * S, -1)
+
+    # sort edges by priority (descending)
+    _, sorted_indices = torch.sort(flat_priority, dim=-1, descending=True)
+
+    total_costs = torch.zeros(B * S, device=device)
+
+    for b_s in range(B * S):
+
+        out_degree = torch.zeros(N, device=device)
+        in_degree = torch.zeros(N, device=device)
+
+        parent = torch.arange(N, device=device)
+
+        def find(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def union(i, j):
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[ri] = rj
+                return True
+            return False
+
+        edge_count = 0
+        current_cost = 0.0
+
+        for idx in sorted_indices[b_s]:
+
+            u = idx // N
+            v = idx % N
+
+            # self-loop 금지
+            if u == v:
+                continue
+
+            # degree constraint
+            if out_degree[u] >= 1 or in_degree[v] >= 1:
+                continue
+
+            root_u = find(u)
+            root_v = find(v)
+
+            # subtour 방지
+            # 마지막 edge가 아니면 cycle 금지
+            if root_u == root_v and edge_count < N - 1:
+                continue
+
+            # 선택
+            union(u, v)
+            out_degree[u] += 1
+            in_degree[v] += 1
+
+            current_cost += flat_dist[b_s, idx]
+            edge_count += 1
+
+            if edge_count == N:
+                break
+
+        total_costs[b_s] = current_cost
+
+    return total_costs.view(B, S), 0 # need tour 
+  
+
 def JSSPEvaluator(adj_mat, np_pt, np_machine, num_jobs):
     
     """
