@@ -34,7 +34,7 @@ class TransformerEncoder(nn.Module):
     def forward(self, node_input, edge_input):
         # node_input: (batch, cnt, info)
         # edge_input: (batch, cnt, cnt)
-        print(edge_input.shape)
+        
         if node_input is None:
             batch_size, num_nodes, _ = edge_input.shape
         # elif edge_input is None:

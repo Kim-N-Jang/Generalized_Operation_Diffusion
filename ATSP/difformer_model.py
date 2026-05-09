@@ -321,10 +321,10 @@ class Difformer_Model(pl.LightningModule):
         #3. adj_mat가 RPD를 구하는 매개변수인데 배치의 평균으로 계산되어야 하는거 아닌가?
         #4. 이 구조라면 test, valid가 제대로 안만들어지면 학습도 제대로 안되는거 아닌가?
 
-        # get_tour_len, _ = ATSPEvaluator(
-        #     adj_mat,
-        #     edge_feature,
-        # )
+        get_tour_len, _ = ATSPEvaluator(
+            adj_mat,
+            edge_feature,
+        )
 
         metrics = {
             f"{split}/Heuristic": objective,
