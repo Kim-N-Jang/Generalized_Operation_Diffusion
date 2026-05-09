@@ -105,8 +105,10 @@ class Difformer_Model(pl.LightningModule):
 
         if self.optimizer_params['lr_scheduler'] == "constant":
             return torch.optim.AdamW(
-                self.model.parameters(), lr=self.optimizer_params['optimizer']['lr'],
-                weight_decay=self.optimizer_params['optimizer']['weight_decay'])
+                list(self.model.parameters()) + list(self.premodel.parameters()),                                                 
+                lr=self.optimizer_params['optimizer']['lr'],                     
+                weight_decay=self.optimizer_params['optimizer']['weight_decay']                                                   
+)   
 
         else:
             optimizer = torch.optim.AdamW(
@@ -321,23 +323,21 @@ class Difformer_Model(pl.LightningModule):
         #3. adj_mat가 RPD를 구하는 매개변수인데 배치의 평균으로 계산되어야 하는거 아닌가?
         #4. 이 구조라면 test, valid가 제대로 안만들어지면 학습도 제대로 안되는거 아닌가?
 
-        get_tour_len, _ = ATSPEvaluator(
-            adj_mat,
-            edge_feature,
-        )
+        # get_tour_len, _ = ATSPEvaluator(
+        #     adj_mat,
+        #     edge_feature,
+        # )
 
         metrics = {
             f"{split}/Heuristic": objective,
-            f"{split}/Diffusion": tour_len,
+            f"{split}/Diffusion": best_tour_len,
         }
+
         for k, v in metrics.items():
             self.log(k, v, on_epoch=True, sync_dist=True)
         # Batch, parallel 중에 opt 설정필요
-        # Opt_Gap = math.max(0,((tour_len - objective) / objective * 100)) 
-        Opt_Gap = 0
+        Opt_Gap = max(0,((float(best_tour_len) - float(objective)) / float(objective) * 100)) 
         self.log(f"{split}/RPD", Opt_Gap, prog_bar=True, on_epoch=True, sync_dist=True)
-        # Terminal Log
-        # print("RPD",RPD)
         return metrics
 
     def run_save_numpy_heatmap(self, adj_mat, np_pt, real_batch_idx, split):

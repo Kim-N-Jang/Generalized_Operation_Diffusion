@@ -69,7 +69,7 @@ trainer_params = {
     'inference_trick': 'ddim',
     'sequential_sampling': 1,
     'parallel_sampling': 1,
-    'epochs': 100,
+    'epochs': 200,
     'batch_size': 10,
     'ckpt_path': None,
     'saving_mode': 'min'

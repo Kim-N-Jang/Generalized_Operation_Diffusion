@@ -6,7 +6,7 @@ batch_size = 10 # 배치 수
 seed = 42
 
 def main():
-    np.random.seed()
+    np.random.seed(seed)
     Data = []
     for _ in range(batch_size):
         Data.append(DataGenerationModel.ATSPGeneration(num_nodes))
