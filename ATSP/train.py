@@ -20,10 +20,10 @@ from difformer_model import Difformer_Model
 # parameters
 
 data_params = {
-    'training_split': 'ATSPData_NumNodes50Seed42Size10.npy',
-    'training_split_label_dir': 'ATSPData_NumNodes50Seed42Size10.npy',
-    'validation_split': 'ATSPData_NumNodes50Seed42Size10.npy',
-    'test_split': 'ATSPData_NumNodes50Seed42Size10.npy',
+    'training_split': 'ATSPData_NumNodes3Seed42Size10.npy',
+    'training_split_label_dir': 'ATSPData_NumNodes3Seed42Size10.npy',
+    'validation_split': 'ATSPData_NumNodes3Seed42Size10.npy',
+    'test_split': 'ATSPData_NumNodes3Seed42Size10.npy',
     'validation_examples': 5,
     'num_workers': 16,
     'storage_path': './Data/TrainData'}
@@ -50,7 +50,16 @@ model_params = {
     'two_opt_iterations': 1000,
     'save_numpy_heatmap': False,
     'use_activation_checkpoint': False,
+    'out_channels': 2,
+    'node_feature_only': False,
+    'aggregate': "sum",
+    'norm' : "layer",
+    'learn_norm' : True,
+    'track_norm' : False,
+    'gated' : True,
 }
+
+model_params['sparse'] = model_params['sparse_factor'] > 0 or model_params['node_feature_only']
 
 optimizer_params = {
     'optimizer': {
@@ -69,10 +78,10 @@ trainer_params = {
     'inference_trick': 'ddim',
     'sequential_sampling': 1,
     'parallel_sampling': 1,
-    'epochs': 200,
+    'epochs': 500,
     'batch_size': 10,
     'ckpt_path': None,
-    'saving_mode': 'min'
+    'saving_mode': 'min',
 }
 
 ##########################################################################################

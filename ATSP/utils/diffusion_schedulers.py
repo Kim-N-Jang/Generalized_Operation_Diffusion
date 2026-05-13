@@ -9,15 +9,15 @@ import torch
 class CategoricalDiffusion(object):
   """Gaussian Diffusion process with linear beta scheduling"""
 
-  def __init__(self, T, schedule):
+  def __init__(self, **trainer_params):
     # Diffusion steps
-    self.T = T
-
+    self.T = trainer_params['diffusion_steps']
+    schedule = trainer_params['diffusion_schedule']
     # Noise schedule
     if schedule == 'linear':
       b0 = 1e-4
       bT = 2e-2
-      self.beta = np.linspace(b0, bT, T)
+      self.beta = np.linspace(b0, bT, self.T)
     elif schedule == 'cosine':
       self.alphabar = self.__cos_noise(np.arange(0, T + 1, 1)) / self.__cos_noise(
           0)  # Generate an extra alpha for bT

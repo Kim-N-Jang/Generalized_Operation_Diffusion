@@ -23,33 +23,19 @@ class Difformer_Model(pl.LightningModule):
                  data_params=None,
                  model_params=None,
                  trainer_params=None,
-                 optimizer_params=None,
-                 node_feature_only=False):
+                 optimizer_params=None):
         super(Difformer_Model, self).__init__()
         self.model_params = model_params
         self.data_params = data_params
         self.trainer_params = trainer_params
         self.optimizer_params = optimizer_params
-        self.diffusion_schedule = self.trainer_params['diffusion_schedule']
-        self.diffusion_steps = self.trainer_params['diffusion_steps']
-        self.sparse = self.model_params['sparse_factor'] > 0 or node_feature_only
-
-        out_channels = 2
-        self.diffusion = CategoricalDiffusion(
-            T=self.diffusion_steps, schedule=self.diffusion_schedule)
+        self.diffusion = CategoricalDiffusion(**self.trainer_params)
+        self.sparse = model_params['sparse']
 
         # 나중에 얘처럼 다 리펙토링 할것 너무 지저분함
         self.premodel = TransformerEncoder(**self.model_params)
 
-        self.model = GNNEncoder(
-            n_layers=self.model_params['n_layers'],
-            hidden_dim=self.model_params['hidden_dim'],
-            out_channels=out_channels,
-            aggregation=self.model_params['aggregation'],
-            sparse=self.sparse,
-            use_activation_checkpoint=self.model_params['use_activation_checkpoint'],
-            node_feature_only=node_feature_only,
-        )
+        self.model = GNNEncoder(**self.model_params)
 
         self.num_training_steps_cached = None
 

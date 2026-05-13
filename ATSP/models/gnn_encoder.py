@@ -29,7 +29,7 @@ class GNNLayer(nn.Module):
       - V. P. Dwivedi, C. K. Joshi, T. Laurent, Y. Bengio, and X. Bresson. Benchmarking graph neural networks. arXiv preprint arXiv:2003.00982, 2020.
   """
 
-    def __init__(self, hidden_dim, aggregation="sum", norm="batch", learn_norm=True, track_norm=False, gated=True):
+    def __init__(self, **model_params):
         """
     Args:
         hidden_dim: Hidden dimension size (int)
@@ -40,12 +40,12 @@ class GNNLayer(nn.Module):
         gated: Whether to use edge gating (True/False)
     """
         super(GNNLayer, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.aggregation = aggregation
-        self.norm = norm
-        self.learn_norm = learn_norm
-        self.track_norm = track_norm
-        self.gated = gated
+        hidden_dim = model_params['hidden_dim']
+        self.aggregation = model_params['aggregation']
+        self.norm = model_params['norm']
+        learn_norm = model_params['learn_norm']
+        track_norm = model_params['track_norm'] 
+        self.gated = model_params['gated']
         assert self.gated, "Use gating with GCN, pass the `--gated` flag"
 
         self.U = nn.Linear(hidden_dim, hidden_dim, bias=True)
@@ -254,20 +254,22 @@ def run_sparse_layer(layer, time_layer, out_layer, adj_matrix, edge_index, add_t
 class GNNEncoder(nn.Module):
     """Configurable GNN Encoder
   """
-
-    def __init__(self, n_layers, hidden_dim, out_channels=1, aggregation="sum", norm="layer",
-                 learn_norm=True, track_norm=False, gated=True,
-                 sparse=False, use_activation_checkpoint=False, node_feature_only=False,
-                 *args, **kwargs):
+    def __init__(self, **model_params):
         super(GNNEncoder, self).__init__()
-        self.sparse = sparse
-        self.node_feature_only = node_feature_only
+
+        self.sparse = model_params['sparse']
+        self.node_feature_only = model_params['node_feature_only']
+        learn_norm = model_params['learn_norm']
+        hidden_dim = model_params['hidden_dim']
+        use_activation_checkpoint = model_params['use_activation_checkpoint']
         self.hidden_dim = hidden_dim
         time_embed_dim = hidden_dim // 2
+        n_layers = model_params['n_layers']
         self.node_embed = nn.Linear(hidden_dim, hidden_dim)
         self.edge_embed = nn.Linear(hidden_dim, hidden_dim)
+        out_channels = model_params['out_channels']
 
-        if not node_feature_only:
+        if not self.node_feature_only:
             self.pos_embed = PositionEmbeddingSine(hidden_dim // 2, normalize=True)
             self.edge_pos_embed = ScalarEmbeddingSine(hidden_dim, normalize=False)
         else:
@@ -286,7 +288,7 @@ class GNNEncoder(nn.Module):
         )
 
         self.layers = nn.ModuleList([
-            GNNLayer(hidden_dim, aggregation, norm, learn_norm, track_norm, gated)
+            GNNLayer(**model_params)
             for _ in range(n_layers)
         ])
 

@@ -1,7 +1,7 @@
 import numpy as np
 import DataGeneration as DataGenerationModel
 
-num_nodes = 50 #도시 수
+num_nodes = 3 #도시 수
 batch_size = 10 # 배치 수
 seed = 42
 
