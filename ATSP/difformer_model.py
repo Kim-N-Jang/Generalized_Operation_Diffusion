@@ -169,7 +169,7 @@ class Difformer_Model(pl.LightningModule):
         train_dataloader = GraphDataLoader(
             self.train_dataset, batch_size=batch_size, shuffle=True,
             num_workers=self.data_params['num_workers'], pin_memory=True,
-            persistent_workers=True, drop_last=False)
+            persistent_workers=self.data_params['num_workers'] > 0, drop_last=False)
 
         return train_dataloader
 

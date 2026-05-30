@@ -2,7 +2,13 @@
 # import
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"  
+import sys
+
+# Set CUDA_VISIBLE_DEVICES only if on Linux/Windows and not already set
+if sys.platform != "darwin" and "CUDA_VISIBLE_DEVICES" not in os.environ:
+    os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+
+is_mac = sys.platform == "darwin"
 from argparse import ArgumentParser
 
 import torch
@@ -25,7 +31,7 @@ data_params = {
     'validation_split': 'ATSPData_NumNodes3Seed42Size10.npy',
     'test_split': 'ATSPData_NumNodes3Seed42Size10.npy',
     'validation_examples': 5,
-    'num_workers': 16,
+    'num_workers': 0 if is_mac else 16,
     'storage_path': './Data/TrainData'}
 
 wandb_params = {
