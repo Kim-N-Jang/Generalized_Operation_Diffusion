@@ -1,0 +1,30 @@
+name: difformer
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - scipy
+  - ninja
+  - pyyaml
+  - tqdm
+  - pip:
+      - torch==2.5.1
+      - torchvision==0.20.1
+      - torchaudio==2.5.1
+      - torch-scatter==2.1.2
+      - torch-sparse==0.6.18
+      - torch-geometric==2.6.1
+      - pytorch-lightning==2.5.2
+      - torchmetrics==1.7.4
+      - wandb==0.21.0
+      - gitpython==3.1.44
+      - aiohttp==3.12.14
+      - pydantic==2.11.7
+      - jinja2
+      - pillow
