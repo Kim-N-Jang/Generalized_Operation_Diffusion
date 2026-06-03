@@ -18,39 +18,43 @@ def ATSPEvaluator(adj_mtrx, edge_feature):
     return: total_costs [B, S], tours [B, S, N+1]
     """
     B, S, N, _ = adj_mtrx.shape
-    device = adj_mtrx.device
+    device = edge_feature.device
+
+    # edge_feature를 adj_mtrx와 동일한 device로 이동
+    edge_feature = edge_feature.to(device)
 
     total_costs = torch.zeros(B, S, device=device)
+
     all_tours = torch.zeros(B, S, N + 1, dtype=torch.long, device=device)
 
     for b in range(B):
         for s in range(S):
             visited = torch.zeros(N, dtype=torch.bool, device=device)
 
-            # 시작점: 전체 엣지 중 확률 최고값의 출발 노드
             flat_idx = adj_mtrx[b, s].argmax().item()
-            current = flat_idx // N  # a→b 중 a
+            current = flat_idx // N
 
             all_tours[b, s, 0] = current
             visited[current] = True
-            cost = 0.0
 
             for step in range(1, N):
                 probs = adj_mtrx[b, s, current].clone()
                 probs[visited] = -1
 
                 next_node = probs.argmax().item()
-                cost += edge_feature[b, current, next_node].item()
+
+                # .item() 대신 텐서 연산으로 누적
+                total_costs[b, s] += edge_feature[b, current, next_node]
 
                 all_tours[b, s, step] = next_node
                 visited[next_node] = True
                 current = next_node
 
             # 시작점으로 복귀
-            all_tours[b, s, N] = all_tours[b, s, 0]
-            cost += edge_feature[b, current, all_tours[b, s, 0].item()].item()
-            total_costs[b, s] = cost
- 
+            start_node = all_tours[b, s, 0].item()
+            all_tours[b, s, N] = start_node
+            total_costs[b, s] += edge_feature[b, current, start_node]
+
     return total_costs, all_tours
   
 

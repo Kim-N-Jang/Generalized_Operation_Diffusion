@@ -174,13 +174,13 @@ class Difformer_Model(pl.LightningModule):
         return train_dataloader
 
     def test_dataloader(self):
-        batch_size = 1
+        batch_size = self.trainer_params['test_batch_size']
         print("Test dataset size:", len(self.test_dataset))
         test_dataloader = GraphDataLoader(self.test_dataset, batch_size=batch_size, shuffle=False)
         return test_dataloader
 
     def val_dataloader(self):
-        batch_size = 1
+        batch_size = self.trainer_params['valid_batch_size']
         val_dataset = torch.utils.data.Subset(self.validation_dataset, range(self.data_params['validation_examples']))
         print("Validation dataset size:", len(val_dataset))
         val_dataloader = GraphDataLoader(val_dataset, batch_size=batch_size, shuffle=False)
@@ -251,79 +251,78 @@ class Difformer_Model(pl.LightningModule):
     def test_step(self, batch, batch_idx, split='test'):
         edge_index = None
         device = batch[-1].device
-
         node_cnt, node_feature, edge_feature, solution_adj, objective = batch
+        B, N, _ = solution_adj.shape
+        S = self.trainer_params['parallel_sampling']
 
+        # points: [B, N, D] → [B*S, N, D]
         points = self.premodel(node_feature, edge_feature)
+        if S > 1:
+            points = points.repeat_interleave(S, dim=0)  # [B*S, N, D]
 
-        if self.trainer_params['parallel_sampling'] > 1:
-            points = points.repeat(self.trainer_params['parallel_sampling'], 1, 1)
+        # xt 초기화: binary categorical noise [B*S, N, N]
+        xt = (torch.rand(B * S, N, N, device=device) > 0.5).long()
 
-        best_tour_len = float('inf')
-        best_adj_mat  = None
+        steps = self.trainer_params['inference_diffusion_steps']
+        time_schedule = InferenceSchedule(
+            inference_schedule=self.trainer_params['inference_schedule'],
+            T=self.diffusion.T,
+            inference_T=steps,
+        )
 
-        for _ in range(self.trainer_params['sequential_sampling']):
-            # 매 sequential 시도마다 새로운 랜덤 노이즈에서 출발
-            xt = (torch.randn(
-                self.trainer_params['parallel_sampling'],
-                node_cnt.item(),
-                node_cnt.item(),
-                device=device
-            ) > 0).long()
+        # solution_adj: [B, N, N] → [B*S, N, N]
+        solution_adj_rep = solution_adj.repeat_interleave(S, dim=0)
 
-            steps = self.trainer_params['inference_diffusion_steps']
-            time_schedule = InferenceSchedule(
-                inference_schedule=self.trainer_params['inference_schedule'],
-                T=self.diffusion.T,
-                inference_T=steps,
+        for i in range(steps):
+            t1, t2 = time_schedule(i)
+            t1 = np.array([t1]).astype(int)
+            t2 = np.array([t2]).astype(int)
+            xt = self.categorical_denoise_step(
+                points, xt, solution_adj_rep, t1, device, edge_index, target_t=t2
             )
 
-            for i in range(steps):
-                t1, t2 = time_schedule(i)
-                t1 = np.array([t1]).astype(int)                                                       
-                t2 = np.array([t2]).astype(int)   
-                xt = self.categorical_denoise_step(
-                    points, xt, solution_adj, t1, device, edge_index, target_t=t2
-                )
+        # xt: [B*S, N, N] → adj_mat: [B, S, N, N]
+        # repeat_interleave로 [A,A,B,B,C,C] 순서이므로 view(B,S)가 배치별로 정확히 대응
+        adj_mat = xt.float().cpu().detach() + 1e-6
+        adj_mat = adj_mat.view(B, S, N, N)
 
-            adj_mat = xt.float().cpu().detach() + 1e-6
-            adj_mat = adj_mat[:,None,:,:] # temp
-            # 이번 sequential 시도의 결과 평가
-            tour_len, _ = ATSPEvaluator(adj_mat, edge_feature)
+        # tour_len: [B, S]
+        tour_len, _ = ATSPEvaluator(adj_mat, edge_feature)
+        assert tour_len.shape == (B, S), \
+            f"ATSPEvaluator tour_len shape 불일치: {tour_len.shape} != ({B}, {S})"
 
-            # 지금까지 중 가장 좋은 결과 추적
-            if tour_len < best_tour_len:
-                best_tour_len = tour_len
-                best_adj_mat  = adj_mat
+        # parallel 중 best 선택 → [B]
+        best_tour_len = tour_len.min(dim=-1).values.cpu()
 
-            if self.model_params['save_numpy_heatmap']:
-                self.run_save_numpy_heatmap(adj_mat.numpy(), points.cpu().numpy()[0], batch_idx, split)
+        # -------------------------------------------------------------------------
+        # sequential_sampling 미사용 버전 (아래는 사용 시 참고용 주석)
+        # for _ in range(self.trainer_params['sequential_sampling']):
+        #     xt = (torch.rand(B * S, N, N, device=device) > 0.5).long()
+        #     ...denoise loop...
+        #     cur_best = tour_len.min(dim=-1).values.cpu()
+        #     if best_tour_len is None:
+        #         best_tour_len = cur_best
+        #     else:
+        #         improved = cur_best < best_tour_len
+        #         best_tour_len = torch.where(improved, cur_best, best_tour_len)
+        # -------------------------------------------------------------------------
 
+        if self.model_params['save_numpy_heatmap']:
+            self.run_save_numpy_heatmap(
+                adj_mat.numpy(), points.cpu().numpy()[0], batch_idx, split
+            )
 
-        # print(adj_mat.shape)
-        # print(node_cnt)
-        # print(edge_feature.shape())
-
-        #1. adj_mat이 바이너리 값이 아님 어떻게 측정하는가?
-        #2. adj_mat는 sequential_sampling 내부에서 선언해놓고 왜 측정은 밖에서 하는가?
-        #3. adj_mat가 RPD를 구하는 매개변수인데 배치의 평균으로 계산되어야 하는거 아닌가?
-        #4. 이 구조라면 test, valid가 제대로 안만들어지면 학습도 제대로 안되는거 아닌가?
-
-        # get_tour_len, _ = ATSPEvaluator(
-        #     adj_mat,
-        #     edge_feature,
-        # )
+        # best_tour_len: [B] cpu, objective: [B] gpu → cpu로 통일
+        opt_gaps = ((best_tour_len - objective.cpu()) / objective.cpu() * 100).clamp(min=0)
 
         metrics = {
-            f"{split}/Heuristic": objective,
-            f"{split}/Diffusion": best_tour_len,
+            f"{split}/Heuristic": objective.mean().item(),
+            f"{split}/Diffusion":  best_tour_len.mean().item(),
+            f"{split}/RPD":        opt_gaps.mean().item(),
         }
-
         for k, v in metrics.items():
             self.log(k, v, on_epoch=True, sync_dist=True)
-        # Batch, parallel 중에 opt 설정필요
-        Opt_Gap = max(0,((float(best_tour_len) - float(objective)) / float(objective) * 100)) 
-        self.log(f"{split}/RPD", Opt_Gap, prog_bar=True, on_epoch=True, sync_dist=True)
+
         return metrics
 
     def run_save_numpy_heatmap(self, adj_mat, np_pt, real_batch_idx, split):
@@ -335,7 +334,7 @@ class Difformer_Model(pl.LightningModule):
         os.makedirs(heatmap_path, exist_ok=True)
         real_batch_idx = real_batch_idx.cpu().numpy().reshape(-1)[0]
         np.save(os.path.join(heatmap_path, f"{split}-heatmap-{real_batch_idx}.npy"), adj_mat)
-        np.save(os.path.join(heatmap_path, f"{split}-points-{real_batch_idx}.npy"), np_pt)
+        np.save(os.path.join(heatmap_path, f"{split}-points-{real_batcQh_idx}.npy"), np_pt)
 
     def validation_step(self, batch, batch_idx):
         return self.test_step(batch, batch_idx, split='val')

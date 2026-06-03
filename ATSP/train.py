@@ -20,10 +20,10 @@ from difformer_model import Difformer_Model
 # parameters
 
 data_params = {
-    'training_split': 'ATSPData_NumNodes3Seed42Size10.npy',
-    'training_split_label_dir': 'ATSPData_NumNodes3Seed42Size10.npy',
-    'validation_split': 'ATSPData_NumNodes3Seed42Size10.npy',
-    'test_split': 'ATSPData_NumNodes3Seed42Size10.npy',
+    'training_split': 'ATSPData_NumNodes100Seed42Size10.npy',
+    'training_split_label_dir': 'ATSPData_NumNodes100Seed42Size10.npy',
+    'validation_split': 'ATSPData_NumNodes100Seed42Size10.npy',
+    'test_split': 'ATSPData_NumNodes100Seed42Size10.npy',
     'validation_examples': 5,
     'num_workers': 16,
     'storage_path': './Data/TrainData'}
@@ -76,10 +76,12 @@ trainer_params = {
     'inference_diffusion_steps': 1000,
     'inference_schedule': 'linear',
     'inference_trick': 'ddim',
-    'sequential_sampling': 1,
-    'parallel_sampling': 1,
+    'sequential_sampling': 1, # 미사용(1로 고정)
+    'parallel_sampling': 2,
     'epochs': 500,
     'batch_size': 10,
+    'valid_batch_size': 5,
+    'test_batch_size': 10,
     'ckpt_path': None,
     'saving_mode': 'min',
 }
