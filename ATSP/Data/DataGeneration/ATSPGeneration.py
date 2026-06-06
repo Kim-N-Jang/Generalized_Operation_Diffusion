@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 
-def ATSPGeneration(node_cnt, lkh_path="/home/inuai_11/Generalized_Operation_Diffusion/ATSP/Data/DataGeneration/LKH-3.0.14/LKH"):
+def ATSPGeneration(node_cnt, lkh_path="/Users/zhoonk/GitHub/Generalized_Operation_Diffusion/ATSP/Data/DataGeneration/LKH-3.0.14/LKH"):
     int_min = 0
     int_max = 1000 * 1000
     scaler = 1000 * 1000

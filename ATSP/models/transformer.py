@@ -1,10 +1,26 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
+from models.nn import timestep_embedding
 
 from .Attention_LIB import MixedScore_MultiHeadAttention
 
-class TransformerEncoder(nn.Module):
+
+class Transformer(nn.Module):
+    def __init__(self, **model_params):
+        super().__init__()
+        self.encoder = Encoder(**model_params)
+        self.decoder = Decoder(**model_params)
+
+    def pre_forward(self, node_input, edge_input):
+        return self.encoder(node_input, edge_input)
+
+    def forward(self, Node, NoisedGraph, MachineGraph, timesteps):
+        return self.decoder(Node, NoisedGraph, MachineGraph, timesteps)
+
+        
+class Encoder(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         encoder_layer_num = model_params['encoder_layer_num']
@@ -53,14 +69,103 @@ class TransformerEncoder(nn.Module):
 
         return out
 
+class Decoder(nn.Module):
+    """Configurable Decoder
+  """
+    def __init__(self, **model_params):
+        super().__init__()
+
+        self.sparse = model_params['sparse']
+        self.node_feature_only = model_params['node_feature_only']
+        hidden_dim = model_params['hidden_dim']
+        use_activation_checkpoint = model_params['use_activation_checkpoint']
+        self.hidden_dim = hidden_dim
+        self.head_num = model_params['head_num']
+        time_embed_dim = hidden_dim // 2
+        n_layers = model_params['n_layers']
+        self.node_embed = nn.Linear(hidden_dim, hidden_dim)
+        self.edge_embed = nn.Linear(1, hidden_dim)
+
+        self.time_embed = nn.Sequential(
+            nn.Linear(hidden_dim, time_embed_dim),
+            nn.ReLU(),
+            nn.Linear(time_embed_dim, time_embed_dim),
+        )
+
+        self.layers = nn.ModuleList([
+            EncoderLayer(**model_params)
+            for _ in range(n_layers)
+        ])
+
+        self.time_embed_layers = nn.ModuleList([
+            nn.Sequential(
+                nn.ReLU(),
+                nn.Linear(
+                    time_embed_dim,
+                    hidden_dim,
+                ),
+            ) for _ in range(n_layers)
+        ])
+
+        self.final_proj = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 4),
+            nn.SiLU(),
+            nn.Linear(hidden_dim * 4, hidden_dim)
+        )
+        self.final_norm = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+        self.final_logit_scale = model_params.get('final_logit_scale', 1.0)
+        self.final_softcap = model_params.get('final_softcap', 50.0)
+        self.use_activation_checkpoint = use_activation_checkpoint
+
+    def forward(self, encoded_nodes, NoisedGraph, solution_adj, timesteps):
+        """
+    Args:
+        Node(x): Input node coordinates (B x V x H)
+        NoisedGraph: Noised graph adjacency matrices (B x V x V)
+        solution_adj: solutions graph adjacency matrices (B x V x V)
+        timesteps: Input node timesteps (B)
+        edge_index: Edge indices (2 x E)
+    Returns:
+        Edge : Updated edge features (B x V x V)
+    """
+        Node = self.node_embed(encoded_nodes)
+        Edge = self.edge_embed(NoisedGraph.unsqueeze(-1))
+        time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
+
+        for layer, time_layer in zip(self.layers, self.time_embed_layers):
+            if self.use_activation_checkpoint:
+                raise NotImplementedError
+
+            Node = layer(Node, Edge)
+            Node = Node + time_layer(time_emb)[:, None, :]
+
+        # GenSCO-style decoder
+        features = self.final_proj(Node)
+        features = self.final_norm(features)
+        
+        logits = torch.matmul(features, features.transpose(1, 2))
+        
+        if self.final_logit_scale != 1.0:
+            logits = logits * self.final_logit_scale
+        if self.final_softcap is not None:
+            logits = self.final_softcap * torch.tanh(logits / self.final_softcap)
+
+        mask_value = 0.5 * torch.finfo(logits.dtype).min
+        _arange = torch.arange(logits.shape[2], device=logits.device)
+        logits = logits.clone()
+        logits[:, _arange, _arange] = mask_value
+
+        Edge = torch.stack([torch.zeros_like(logits), logits], dim=1)
+        return Edge
+
 
 class EncoderLayer(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         self.encoding_block = EncodingBlock(**model_params)
 
-    def forward(self, node_emb, edge_emb):
-        emb_out = self.encoding_block(node_emb, edge_emb)
+    def forward(self, node_emb, edge_emb=None, mtrx=None):
+        emb_out = self.encoding_block(node_emb, edge_emb, mtrx=mtrx)
         return emb_out
 
 
@@ -83,7 +188,7 @@ class EncodingBlock(nn.Module):
 
         self.mixed_score_MHA = MixedScore_MultiHeadAttention(**model_params)
 
-    def forward(self, node_emb, edge_emb):
+    def forward(self, node_emb, edge_emb=None, mtrx=None):
         # NOTE: row and col can be exchanged, if cost_mat.transpose(1,2) is used
         # input1.shape: (batch, row_cnt, embedding)
         # input2.shape: (batch, col_cnt, embedding)
@@ -95,7 +200,10 @@ class EncodingBlock(nn.Module):
         k = reshape_by_heads(self.Wk(node_emb), head_num=head_num)
         v = reshape_by_heads(self.Wv(node_emb), head_num=head_num)
 
-        out_concat = self.mixed_score_MHA(q, k, v, edge_emb)
+        if mtrx is not None:
+            out_concat = multi_head_attention(q, k, v, mtrx=mtrx)
+        else:
+            out_concat = self.mixed_score_MHA(q, k, v, edge_emb)
 
         # shape: (batch, row_cnt, head_num*qkv_dim)
 

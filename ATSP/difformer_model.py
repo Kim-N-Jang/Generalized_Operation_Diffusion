@@ -10,8 +10,7 @@ import pytorch_lightning as pl
 
 from pytorch_lightning.utilities import rank_zero_info
 from torch_geometric.data import DataLoader as GraphDataLoader
-from models.gnn_encoder import GNNEncoder
-from models.transformer_encoder import TransformerEncoder
+from models.transformer import Transformer
 from utils.lr_schedulers import get_schedule_fn
 from utils.diffusion_schedulers import CategoricalDiffusion, InferenceSchedule
 from co_datasets.atsp_graph_dataset import ATSPGraphDataset
@@ -33,9 +32,7 @@ class Difformer_Model(pl.LightningModule):
         self.sparse = model_params['sparse']
 
         # 나중에 얘처럼 다 리펙토링 할것 너무 지저분함
-        self.premodel = TransformerEncoder(**self.model_params)
-
-        self.model = GNNEncoder(**self.model_params)
+        self.model = Transformer(**self.model_params)
 
         self.num_training_steps_cached = None
 
@@ -91,10 +88,10 @@ class Difformer_Model(pl.LightningModule):
 
         if self.optimizer_params['lr_scheduler'] == "constant":
             return torch.optim.AdamW(
-                list(self.model.parameters()) + list(self.premodel.parameters()),                                                 
+                self.model.parameters(),                                                 
                 lr=self.optimizer_params['optimizer']['lr'],                     
                 weight_decay=self.optimizer_params['optimizer']['weight_decay']                                                   
-)   
+            )   
 
         else:
             optimizer = torch.optim.AdamW(
@@ -187,11 +184,11 @@ class Difformer_Model(pl.LightningModule):
         return val_dataloader
 
 
-    def forward(self, points, xt, solution_adj, t, device, edge_index=None):                            
-        return self.model(points, xt, solution_adj, t, edge_index) 
+    def forward(self, points, xt, solution_adj, t, device):                            
+        return self.model(points, xt, solution_adj, t) 
 
     def pre_forward(self, node_input, edge_input):
-        return self.premodel(node_input, edge_input)
+        return self.model.pre_forward(node_input, edge_input)
 
     def categorical_training_step(self, batch, batch_idx):
         edge_index = None
@@ -201,7 +198,7 @@ class Difformer_Model(pl.LightningModule):
         solution_adj_onehot = F.one_hot(solution_adj.long(), num_classes=2).float()
 
         # 인코더 입력 및 엣지, 노드 정보 저장
-        points = self.premodel(node_feature, edge_feature)
+        points = self.model.pre_forward(node_feature, edge_feature)
 
         xt = self.diffusion.sample(solution_adj_onehot, t)
         xt = xt * 2 - 1
@@ -254,9 +251,8 @@ class Difformer_Model(pl.LightningModule):
         node_cnt, node_feature, edge_feature, solution_adj, objective = batch
         B, N, _ = solution_adj.shape
         S = self.trainer_params['parallel_sampling']
-
         # points: [B, N, D] → [B*S, N, D]
-        points = self.premodel(node_feature, edge_feature)
+        points = self.model.pre_forward(node_feature, edge_feature)
         if S > 1:
             points = points.repeat_interleave(S, dim=0)  # [B*S, N, D]
 
