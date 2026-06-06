@@ -195,36 +195,62 @@ class Difformer_Model(pl.LightningModule):
 
     def categorical_training_step(self, batch, batch_idx):
         edge_index = None
-
         node_cnt, node_feature, edge_feature, solution_adj, objective = batch
-        t = np.random.randint(1, self.diffusion.T + 1, node_cnt.shape[0]).astype(int)
-        solution_adj_onehot = F.one_hot(solution_adj.long(), num_classes=2).float()
+        B = node_cnt.shape[0]
+        device = solution_adj.device
 
-        # 인코더 입력 및 엣지, 노드 정보 저장
+        # Asymmetric Time Sampling (SCE)
+        t = np.random.randint(1, self.diffusion.T + 1, B).astype(int)
+        k = np.random.randint(5, 51, B).astype(int)
+        t_plus_k = np.clip(t + k, 1, self.diffusion.T)
+
+        solution_adj_onehot = F.one_hot(solution_adj.long(), num_classes=2).float()
         points = self.premodel(node_feature, edge_feature)
 
+        # Two noisy states from forward diffusion
         xt = self.diffusion.sample(solution_adj_onehot, t)
         xt = xt * 2 - 1
         xt = xt * (1.0 + 0.05 * torch.rand_like(xt))
 
-        t = torch.from_numpy(t).float().view(solution_adj.shape[0])
+        xt_plus_k = self.diffusion.sample(solution_adj_onehot, t_plus_k)
+        xt_plus_k = xt_plus_k * 2 - 1
+        xt_plus_k = xt_plus_k * (1.0 + 0.05 * torch.rand_like(xt_plus_k))
 
-        # Denoise
-        # xt:노이즈
-        # t: 시간 스텝
-        # solution_adj: 정답
-        x0_pred = self.forward(
-            points.float().to(solution_adj.device),
-            xt.float().to(solution_adj.device),
-            solution_adj.float().to(solution_adj.device),
-            t.float().to(solution_adj.device),
+        t_tensor = torch.from_numpy(t).float().view(B)
+        t_plus_k_tensor = torch.from_numpy(t_plus_k).float().view(B)
+
+        # One-step denoising predictions at t and t+k
+        x0_pred_t = self.forward(
+            points.float().to(device),
+            xt.float().to(device),
+            solution_adj.float().to(device),
+            t_tensor.float().to(device),
+            edge_index,
+        )
+        x0_pred_t_plus_k = self.forward(
+            points.float().to(device),
+            xt_plus_k.float().to(device),
+            solution_adj.float().to(device),
+            t_plus_k_tensor.float().to(device),
             edge_index,
         )
 
-        # Compute loss
+        # Task loss (CE) for both predictions
         loss_func = nn.CrossEntropyLoss()
-        loss = loss_func(x0_pred, solution_adj.long())
+        loss_task = loss_func(x0_pred_t, solution_adj.long()) + \
+                    loss_func(x0_pred_t_plus_k, solution_adj.long())
+
+        # Self-Consistency loss: force both predictions to the same X0 space
+        prob_t = x0_pred_t.softmax(dim=1)
+        prob_t_plus_k = x0_pred_t_plus_k.softmax(dim=1)
+        loss_cons = F.mse_loss(prob_t, prob_t_plus_k)
+
+        lambda_cons = self.trainer_params.get('lambda_consistency', 0.1)
+        loss = loss_task + lambda_cons * loss_cons
+
         self.log("train/loss", loss)
+        self.log("train/loss_task", loss_task)
+        self.log("train/loss_cons", loss_cons)
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -248,6 +274,32 @@ class Difformer_Model(pl.LightningModule):
             xt = self.categorical_posterior(target_t, t, x0_pred_prob, xt)
             return xt
 
+    def eis_denoise_step(self, points, xt, solution_adj, t, device, sigma_t, edge_index=None):
+        """EIS: one-step denoise + pow-schedule perturbation + Bernoulli sampling."""
+        with torch.no_grad():
+            t_tensor = torch.from_numpy(t).view(1)
+            # Center {0,1} → {-1,1} to match training distribution (xt * 2 - 1)
+            xt_centered = xt.float() * 2 - 1
+            x0_pred = self.forward(
+                points.float().to(device),
+                xt_centered.to(device),
+                solution_adj.float().to(device),
+                t_tensor.float().to(device),
+                edge_index.long().to(device) if edge_index is not None else None,
+            )
+            if not self.sparse:
+                # x0_pred: [B, 2, N, N] → prob of edge=1: [B, N, N]
+                x0_pred_prob = x0_pred.permute(0, 2, 3, 1).contiguous().softmax(dim=-1)[..., 1]
+            else:
+                x0_pred_prob = x0_pred.reshape((1, points.shape[0], -1, 2)).softmax(dim=-1)[..., 1]
+
+            if sigma_t > 0:
+                uniform_noise = torch.rand_like(x0_pred_prob)
+                mixed_prob = (1.0 - sigma_t) * x0_pred_prob + sigma_t * uniform_noise
+                return torch.bernoulli(mixed_prob.clamp(0, 1))
+            else:
+                return (x0_pred_prob > 0.5).float()
+
     def test_step(self, batch, batch_idx, split='test'):
         edge_index = None
         device = batch[-1].device
@@ -261,24 +313,21 @@ class Difformer_Model(pl.LightningModule):
             points = points.repeat_interleave(S, dim=0)  # [B*S, N, D]
 
         # xt 초기화: binary categorical noise [B*S, N, N]
-        xt = (torch.rand(B * S, N, N, device=device) > 0.5).long()
+        xt = (torch.rand(B * S, N, N, device=device) > 0.5).float()
 
         steps = self.trainer_params['inference_diffusion_steps']
-        time_schedule = InferenceSchedule(
-            inference_schedule=self.trainer_params['inference_schedule'],
-            T=self.diffusion.T,
-            inference_T=steps,
-        )
+        alpha = self.trainer_params.get('inference_alpha', 2.0)
 
         # solution_adj: [B, N, N] → [B*S, N, N]
         solution_adj_rep = solution_adj.repeat_interleave(S, dim=0)
 
+        # EIS: alternating denoise + pow-schedule perturbation
         for i in range(steps):
-            t1, t2 = time_schedule(i)
-            t1 = np.array([t1]).astype(int)
-            t2 = np.array([t2]).astype(int)
-            xt = self.categorical_denoise_step(
-                points, xt, solution_adj_rep, t1, device, edge_index, target_t=t2
+            t_ratio = 1.0 - (i / steps)
+            sigma_t = t_ratio ** alpha
+            t_val = np.array([max(1, round(t_ratio * self.diffusion.T))]).astype(int)
+            xt = self.eis_denoise_step(
+                points, xt, solution_adj_rep, t_val, device, sigma_t, edge_index
             )
 
         # xt: [B*S, N, N] → adj_mat: [B, S, N, N]
